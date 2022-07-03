@@ -22,7 +22,7 @@
 uint8_t z_random_u8(void)
 {
     uint8_t ret;
-#if defined(ZENOH_LINUX)
+#if defined(ZENOH_LINUX) || defined(ZENOH_NUTTX)
     getrandom(&ret, sizeof(uint8_t), GRND_RANDOM);
 #elif defined(ZENOH_MACOS)
     ret = z_random_u32();
@@ -34,7 +34,7 @@ uint8_t z_random_u8(void)
 uint16_t z_random_u16(void)
 {
     uint16_t ret;
-#if defined(ZENOH_LINUX)
+#if defined(ZENOH_LINUX) || defined(ZENOH_NUTTX)
     getrandom(&ret, sizeof(uint16_t), GRND_RANDOM);
 #elif defined(ZENOH_MACOS)
     ret = z_random_u32();
@@ -46,7 +46,7 @@ uint16_t z_random_u16(void)
 uint32_t z_random_u32(void)
 {
     uint32_t ret;
-#if defined(ZENOH_LINUX)
+#if defined(ZENOH_LINUX) || defined(ZENOH_NUTTX)
     getrandom(&ret, sizeof(uint32_t), GRND_RANDOM);
 #elif defined(ZENOH_MACOS)
     ret = arc4random();
@@ -58,7 +58,7 @@ uint32_t z_random_u32(void)
 uint64_t z_random_u64(void)
 {
     uint64_t ret = 0;
-#if defined(ZENOH_LINUX)
+#if defined(ZENOH_LINUX) || defined(ZENOH_NUTTX)
     getrandom(&ret, sizeof(uint64_t), GRND_RANDOM);
 #elif defined(ZENOH_MACOS)
     ret |= z_random_u32();
@@ -70,7 +70,7 @@ uint64_t z_random_u64(void)
 
 void z_random_fill(void *buf, size_t len)
 {
-#if defined(ZENOH_LINUX)
+#if defined(ZENOH_LINUX) || defined(ZENOH_NUTTX)
     getrandom(buf, len, GRND_RANDOM);
 #elif defined(ZENOH_MACOS)
     arc4random_buf(buf, len);

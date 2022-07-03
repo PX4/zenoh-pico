@@ -144,7 +144,7 @@ size_t _zn_read_exact_tcp(int sock, uint8_t *ptr, size_t len)
 
 size_t _zn_send_tcp(int sock, const uint8_t *ptr, size_t len)
 {
-#if defined(ZENOH_LINUX)
+#if defined(ZENOH_LINUX) || defined(ZENOH_NUTTX)
     return send(sock, ptr, len, MSG_NOSIGNAL);
 #else
     return send(sock, ptr, len, 0);
@@ -340,7 +340,7 @@ int _zn_open_udp_multicast(void *arg_1, void **arg_2, const clock_t tout, const 
 // This is leaking 16 bytes according to valgrind, but it is a know problem on some libc6 implementations:
 //    https://lists.debian.org/debian-glibc/2016/03/msg00241.html
 // To avoid a fix to break zenoh-pico, we are let it leak for the moment.
-//#if defined(ZENOH_LINUX)
+//#if defined(ZENOH_LINUX) || defined(ZENOH_NUTTX)
 //    z_free(lsockaddr);
 //#endif
 
@@ -376,7 +376,7 @@ int _zn_listen_udp_multicast(void *arg, const clock_t tout, const z_str_t iface)
 #if defined(ZENOH_MACOS)
     if (bind(sock, raddr->ai_addr, raddr->ai_addrlen) < 0)
         goto _ZN_LISTEN_UDP_MULTICAST_ERROR_2;
-#elif defined(ZENOH_LINUX)
+#elif defined(ZENOH_LINUX) || defined(ZENOH_NUTTX)
     if (raddr->ai_family == AF_INET)
     {
         struct sockaddr_in address = {AF_INET, ((struct sockaddr_in *)raddr->ai_addr)->sin_port, {0}, {0}};

@@ -15,7 +15,7 @@
 #ifndef ZENOH_PICO_SYSTEM_COMMON_H
 #define ZENOH_PICO_SYSTEM_COMMON_H
 
-#if defined(ZENOH_LINUX) || defined(ZENOH_MACOS)
+#if defined(ZENOH_LINUX) || defined(ZENOH_MACOS) || defined(ZENOH_NUTTX)
 #include "zenoh-pico/system/platform/unix.h"
 #elif defined(ZENOH_ESPIDF)
 #include "zenoh-pico/system/platform/espidf.h"
