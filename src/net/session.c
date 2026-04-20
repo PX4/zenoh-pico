@@ -14,6 +14,7 @@
 
 #include "zenoh-pico/net/session.h"
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdlib.h>
 
@@ -23,6 +24,7 @@
 #include "zenoh-pico/protocol/core.h"
 #include "zenoh-pico/protocol/definitions/declarations.h"
 #include "zenoh-pico/protocol/definitions/network.h"
+#include "zenoh-pico/runtime/runtime.h"
 #include "zenoh-pico/session/interest.h"
 #include "zenoh-pico/session/utils.h"
 #include "zenoh-pico/transport/common/lease.h"
@@ -138,11 +140,12 @@ static z_result_t _z_open_inner(_z_session_rc_t *zs, _z_string_t *locator, const
     z_result_t ret = _Z_RES_OK;
     _z_session_t *zn = _Z_RC_IN_VAL(zs);
 
-    ret = _z_new_transport(&zn->_tp, zid, locator, zn->_mode, peer_op, config);
+    ret = _z_new_transport(&zn->_tp, zid, locator, zn->_mode, peer_op, config, &_Z_RC_IN_VAL(zs)->_runtime);
     if (ret != _Z_RES_OK) {
         return ret;
     }
     _z_transport_get_common(&zn->_tp)->_session = _z_session_rc_clone_as_weak(zs);
+    _z_transport_get_common(&zn->_tp)->_state = _Z_TRANSPORT_STATE_OPEN;
 #if Z_FEATURE_MULTICAST_DECLARATIONS == 1
     if (zn->_tp._type == _Z_TRANSPORT_MULTICAST_TYPE) {
         ret = _z_interest_pull_resource_from_peers(zn);
@@ -207,54 +210,71 @@ z_result_t _z_open(_z_session_rc_t *zn, _z_config_t *config, const _z_id_t *zid)
 }
 
 #if Z_FEATURE_AUTO_RECONNECT == 1
+void _z_client_reopen_task_drop(void *ztc_arg) {
+    _z_transport_common_t *tc = (_z_transport_common_t *)ztc_arg;
+    if (tc->_state == _Z_TRANSPORT_STATE_RECONNECTING) {
+        // Drop the weak session reference as the task is being dropped in the middle of reconnection.
+        _z_session_weak_drop(&tc->_session);
+        tc->_state = _Z_TRANSPORT_STATE_CLOSED;
+    }
+}
 
-z_result_t _z_reopen(_z_session_rc_t *zn) {
-    z_result_t ret = _Z_RES_OK;
-    _z_session_t *zs = _Z_RC_IN_VAL(zn);
-    if (_z_config_is_empty(&zs->_config)) {
-        return ret;
+_z_fut_fn_result_t _z_client_reopen_task_fn(void *ztc_arg, _z_executor_t *executor) {
+    _z_transport_common_t *tc = (_z_transport_common_t *)ztc_arg;
+    _z_transport_tasks_t tasks_handles = tc->_tasks;
+    _z_session_rc_t zs = _z_session_weak_upgrade(&tc->_session);  // should not fail
+    _z_session_t *s = _Z_RC_IN_VAL(&zs);
+    _z_session_weak_drop(&tc->_session);
+
+    if (_z_config_is_empty(&s->_config)) {
+        _z_session_rc_drop(&zs);
+        return _z_fut_fn_result_ready();
+    }
+    _z_session_transport_mutex_lock(s);
+    z_result_t ret = _z_open(&zs, &s->_config, &s->_local_zid);
+    _z_session_transport_mutex_unlock(s);
+    if (ret != _Z_RES_OK) {
+        if (ret == _Z_ERR_TRANSPORT_OPEN_FAILED || ret == _Z_ERR_SCOUT_NO_RESULTS ||
+            ret == _Z_ERR_TRANSPORT_TX_FAILED || ret == _Z_ERR_TRANSPORT_RX_FAILED) {
+            _Z_DEBUG("Reopen failed, next try in 1s");
+            tc->_session = _z_session_rc_clone_as_weak(&zs);
+            tc->_state = _Z_TRANSPORT_STATE_RECONNECTING;
+            tc->_tasks = tasks_handles;
+            _z_session_rc_drop(&zs);
+            return _z_fut_fn_result_wake_up_after(1000);
+        } else {
+            _Z_ERROR("Reopen failed, will not retry");
+            tc->_state = _Z_TRANSPORT_STATE_CLOSED;
+            _z_session_rc_drop(&zs);
+            return _z_fut_fn_result_ready();
+        }
     }
 
-    do {
-        ret = _z_open(zn, &zs->_config, &zs->_local_zid);
-        if (ret != _Z_RES_OK) {
-            if (ret == _Z_ERR_TRANSPORT_OPEN_FAILED || ret == _Z_ERR_SCOUT_NO_RESULTS ||
-                ret == _Z_ERR_TRANSPORT_TX_FAILED || ret == _Z_ERR_TRANSPORT_RX_FAILED) {
-                _Z_DEBUG("Reopen failed, next try in 1s");
-                z_sleep_s(1);
-                continue;
-            } else {
-                return ret;
+    tc->_tasks = tasks_handles;
+    if (!_z_network_message_slist_is_empty(s->_declaration_cache)) {
+        _z_network_message_slist_t *iter = s->_declaration_cache;
+        while (iter != NULL) {
+            _z_network_message_t *n_msg = _z_network_message_slist_value(iter);
+            ret = _z_send_n_msg(s, n_msg, Z_RELIABILITY_RELIABLE, Z_CONGESTION_CONTROL_BLOCK, NULL);
+            if (ret != _Z_RES_OK) {
+                _Z_DEBUG("Send message during reopen failed: %i", ret);
+                _z_transport_clear(&s->_tp);
+                tc->_session = _z_session_rc_clone_as_weak(&zs);
+                tc->_state = _Z_TRANSPORT_STATE_RECONNECTING;
+                _z_session_rc_drop(&zs);
+                return _z_fut_fn_result_continue();
             }
-        }
 
-#if Z_FEATURE_MULTI_THREAD == 1
-        ret = _zp_start_lease_task(zs, zs->_lease_task_attr);
-        if (ret != _Z_RES_OK) {
-            return ret;
+            iter = _z_network_message_slist_next(iter);
         }
-        ret = _zp_start_read_task(zs, zs->_read_task_attr);
-        if (ret != _Z_RES_OK) {
-            return ret;
-        }
-#endif  // Z_FEATURE_MULTI_THREAD == 1
-
-        if (ret == _Z_RES_OK && !_z_network_message_slist_is_empty(zs->_declaration_cache)) {
-            _z_network_message_slist_t *iter = zs->_declaration_cache;
-            while (iter != NULL) {
-                _z_network_message_t *n_msg = _z_network_message_slist_value(iter);
-                ret = _z_send_n_msg(zs, n_msg, Z_RELIABILITY_RELIABLE, Z_CONGESTION_CONTROL_BLOCK, NULL);
-                if (ret != _Z_RES_OK) {
-                    _Z_DEBUG("Send message during reopen failed: %i", ret);
-                    continue;
-                }
-
-                iter = _z_network_message_slist_next(iter);
-            }
-        }
-    } while (ret != _Z_RES_OK);
-
-    return ret;
+    }
+    _z_session_rc_drop(&zs);
+    _Z_DEBUG("Reconnected successfully");
+    // Resume all sibling tasks that suspended themselves while waiting for reconnection.
+    for (size_t i = 0; i < _Z_TRANSPORT_TASK_COUNT; i++) {
+        _z_executor_resume_suspended_fut(executor, &tc->_tasks._task_handles[i]);
+    }
+    return _z_fut_fn_result_ready();
 }
 
 void _z_cache_declaration(_z_session_t *zs, const _z_network_message_t *n_msg) {
@@ -325,12 +345,35 @@ void _z_prune_declaration(_z_session_t *zs, const _z_network_message_t *n_msg) {
 }
 #endif  // Z_FEATURE_AUTO_RECONNECT == 1
 
-void _z_close(_z_session_t *zn) { _z_session_close(zn, _Z_CLOSE_GENERIC); }
+bool _z_session_is_closed(const _z_session_t *session) {
+    return _z_atomic_bool_load((_z_atomic_bool_t *)&session->_is_closed, _z_memory_order_acquire);
+}
 
-bool _z_session_is_closed(const _z_session_t *session) { return session->_tp._type == _Z_TRANSPORT_NONE; }
+bool _z_session_has_router_peer(const _z_session_t *session) {
+    if (session->_tp._type == _Z_TRANSPORT_UNICAST_TYPE) {
+        _z_transport_peer_unicast_slist_t *peers = session->_tp._transport._unicast._peers;
+        while (peers != NULL) {
+            _z_transport_peer_unicast_t *peer = _z_transport_peer_unicast_slist_value(peers);
+            if (peer->common._remote_whatami == Z_WHATAMI_ROUTER) {
+                return true;
+            }
+            peers = _z_transport_peer_unicast_slist_next(peers);
+        }
+    } else if (session->_tp._type == _Z_TRANSPORT_MULTICAST_TYPE) {
+        _z_transport_peer_multicast_slist_t *peers = session->_tp._transport._multicast._peers;
+        while (peers != NULL) {
+            _z_transport_peer_multicast_t *peer = _z_transport_peer_multicast_slist_value(peers);
+            if (peer->common._remote_whatami == Z_WHATAMI_ROUTER) {
+                return true;
+            }
+            peers = _z_transport_peer_multicast_slist_next(peers);
+        }
+    }
+    return false;
+}
 
-_z_session_rc_t _z_session_weak_upgrade_if_open(const _z_session_weak_t *session) {
-    _z_session_rc_t sess_rc = _z_session_weak_upgrade(session);
+_z_session_rc_t _z_session_weak_upgrade_if_open(const _z_session_weak_t *weak) {
+    _z_session_rc_t sess_rc = _z_session_weak_upgrade(weak);
     if (!_Z_RC_IS_NULL(&sess_rc) && _z_session_is_closed(_Z_RC_IN_VAL(&sess_rc))) {
         _z_session_rc_drop(&sess_rc);
     }
@@ -367,184 +410,89 @@ z_result_t _zp_send_keep_alive(_z_session_t *zn) { return _z_send_keep_alive(&zn
 
 z_result_t _zp_send_join(_z_session_t *zn) { return _z_send_join(&zn->_tp); }
 
-#ifdef Z_FEATURE_UNSTABLE_API
-#if Z_FEATURE_PERIODIC_TASKS == 1
-z_result_t _zp_process_periodic_tasks(_z_session_t *zn) {
-    return _zp_periodic_scheduler_process_tasks(&zn->_periodic_scheduler);
-}
-
-z_result_t _zp_periodic_task_add(_z_session_t *zn, const _zp_closure_periodic_task_t *closure, uint64_t period_ms,
-                                 uint32_t *id) {
-    return _zp_periodic_scheduler_add(&zn->_periodic_scheduler, closure, period_ms, id);
-}
-
-z_result_t _zp_periodic_task_remove(_z_session_t *zn, uint32_t id) {
-    return _zp_periodic_scheduler_remove(&zn->_periodic_scheduler, id);
-}
-#endif
-#endif
-
-#if Z_FEATURE_MULTI_THREAD == 1
-z_result_t _zp_start_read_task(_z_session_t *zn, z_task_attr_t *attr) {
-    z_result_t ret = _Z_RES_OK;
-    // Allocate task
-    _z_task_t *task = (_z_task_t *)z_malloc(sizeof(_z_task_t));
-    if (task == NULL) {
-        _Z_ERROR_LOG(_Z_ERR_SYSTEM_OUT_OF_MEMORY);
-        ret = _Z_ERR_SYSTEM_OUT_OF_MEMORY;
-    }
-    // Call transport function
+z_result_t _zp_start_transport_tasks(_z_session_t *zn) {
     switch (zn->_tp._type) {
-        case _Z_TRANSPORT_UNICAST_TYPE:
-            ret = _zp_unicast_start_read_task(&zn->_tp, attr, task);
-            break;
-        case _Z_TRANSPORT_MULTICAST_TYPE:
-            ret = _zp_multicast_start_read_task(&zn->_tp, attr, task);
-            break;
-        case _Z_TRANSPORT_RAWETH_TYPE:
-            ret = _zp_raweth_start_read_task(&zn->_tp, attr, task);
-            break;
-        default:
-            _Z_ERROR_LOG(_Z_ERR_TRANSPORT_NOT_AVAILABLE);
-            ret = _Z_ERR_TRANSPORT_NOT_AVAILABLE;
-            break;
-    }
-    // Free task if operation failed
-    if (ret != _Z_RES_OK) {
-        z_free(task);
+#if Z_FEATURE_UNICAST_TRANSPORT == 1
+        case _Z_TRANSPORT_UNICAST_TYPE: {
+            _z_transport_common_t *tc = &zn->_tp._transport._unicast._common;
+            // Order must match _Z_TRANSPORT_TASK_* index constants.
+            _z_fut_fn_t tasks[_Z_TRANSPORT_TASK_COUNT] = {0};
+            tasks[_Z_TRANSPORT_TASK_KEEP_ALIVE] = _zp_unicast_keep_alive_task_fn;
+            tasks[_Z_TRANSPORT_TASK_LEASE] = _zp_unicast_lease_task_fn;
+            tasks[_Z_TRANSPORT_TASK_READ] = _zp_unicast_read_task_fn;
+
+            for (size_t i = 0; i < _ZP_ARRAY_SIZE(tasks); i++) {
+                if (tasks[i] == NULL) continue;
+                _z_fut_t f = _z_fut_null();
+                f._fut_arg = &zn->_tp._transport._unicast;
+                f._fut_fn = tasks[i];
+                _z_fut_handle_t h = _z_runtime_spawn(&zn->_runtime, &f);
+                if (_z_fut_handle_is_null(h)) {
+                    _Z_ERROR_RETURN(_Z_ERR_FAILED_TO_SPAWN_TASK);
+                }
 #if Z_FEATURE_AUTO_RECONNECT == 1
-    } else {
-        zn->_read_task_attr = attr;
+                tc->_tasks._task_handles[i] = h;
 #endif
-    }
-    return ret;
-}
+            }
+            break;
+        }
+#endif
+#if Z_FEATURE_MULTICAST_TRANSPORT == 1
+        case _Z_TRANSPORT_MULTICAST_TYPE: {
+            _z_transport_common_t *tc = &zn->_tp._transport._multicast._common;
+            // Order must match _Z_TRANSPORT_TASK_* index constants.
+            _z_fut_fn_t tasks[_Z_TRANSPORT_TASK_COUNT] = {0};
+            tasks[_Z_TRANSPORT_TASK_KEEP_ALIVE] = _zp_multicast_keep_alive_task_fn;
+            tasks[_Z_TRANSPORT_TASK_LEASE] = _zp_multicast_lease_task_fn;
+            tasks[_Z_TRANSPORT_TASK_READ] = _zp_multicast_read_task_fn;
+            tasks[_Z_TRANSPORT_TASK_SEND_JOIN] = _zp_multicast_send_join_task_fn;
 
-z_result_t _zp_start_lease_task(_z_session_t *zn, z_task_attr_t *attr) {
-    z_result_t ret = _Z_RES_OK;
-    // Allocate task
-    _z_task_t *task = (_z_task_t *)z_malloc(sizeof(_z_task_t));
-    if (task == NULL) {
-        _Z_ERROR_LOG(_Z_ERR_SYSTEM_OUT_OF_MEMORY);
-        ret = _Z_ERR_SYSTEM_OUT_OF_MEMORY;
-    }
-    // Call transport function
-    switch (zn->_tp._type) {
-        case _Z_TRANSPORT_UNICAST_TYPE:
-            ret = _zp_unicast_start_lease_task(&zn->_tp, attr, task);
-            break;
-        case _Z_TRANSPORT_MULTICAST_TYPE:
-            ret = _zp_multicast_start_lease_task(&zn->_tp._transport._multicast, attr, task);
-            break;
-        case _Z_TRANSPORT_RAWETH_TYPE:
-            ret = _zp_multicast_start_lease_task(&zn->_tp._transport._raweth, attr, task);
-            break;
-        default:
-            _Z_ERROR_LOG(_Z_ERR_TRANSPORT_NOT_AVAILABLE);
-            ret = _Z_ERR_TRANSPORT_NOT_AVAILABLE;
-            break;
-    }
-    // Free task if operation failed
-    if (ret != _Z_RES_OK) {
-        z_free(task);
+            for (size_t i = 0; i < _ZP_ARRAY_SIZE(tasks); i++) {
+                if (tasks[i] == NULL) continue;
+                _z_fut_t f = _z_fut_null();
+                f._fut_arg = &zn->_tp._transport._multicast;
+                f._fut_fn = tasks[i];
+                _z_fut_handle_t h = _z_runtime_spawn(&zn->_runtime, &f);
+                if (_z_fut_handle_is_null(h)) {
+                    _Z_ERROR_RETURN(_Z_ERR_FAILED_TO_SPAWN_TASK);
+                }
 #if Z_FEATURE_AUTO_RECONNECT == 1
-    } else {
-        zn->_lease_task_attr = attr;
+                tc->_tasks._task_handles[i] = h;
 #endif
-    }
-    return ret;
-}
+            }
+            break;
+        }
+#endif
+#if Z_FEATURE_RAWETH_TRANSPORT == 1
+        case _Z_TRANSPORT_RAWETH_TYPE: {
+            _z_transport_common_t *tc = &zn->_tp._transport._raweth._common;
+            // Order must match _Z_TRANSPORT_TASK_* index constants.
+            _z_fut_fn_t tasks[_Z_TRANSPORT_TASK_COUNT] = {0};
+            tasks[_Z_TRANSPORT_TASK_KEEP_ALIVE] = _zp_multicast_keep_alive_task_fn;
+            tasks[_Z_TRANSPORT_TASK_LEASE] = _zp_multicast_lease_task_fn;
+            tasks[_Z_TRANSPORT_TASK_READ] = _zp_raweth_read_task_fn;
+            tasks[_Z_TRANSPORT_TASK_SEND_JOIN] = _zp_multicast_send_join_task_fn;
 
-#ifdef Z_FEATURE_UNSTABLE_API
-#if Z_FEATURE_PERIODIC_TASKS == 1
-z_result_t _zp_start_periodic_scheduler_task(_z_session_t *zn, z_task_attr_t *attr) {
-    // Allocate task
-    _z_task_t *task = (_z_task_t *)z_malloc(sizeof(_z_task_t));
-    if (task == NULL) {
-        _Z_ERROR_RETURN(_Z_ERR_SYSTEM_OUT_OF_MEMORY);
-    }
-    z_result_t ret = _zp_periodic_scheduler_init(&zn->_periodic_scheduler);
-    if (ret != _Z_RES_OK) {
-        z_free(task);
-        _Z_ERROR_RETURN(ret);
-    }
-    ret = _zp_periodic_scheduler_start_task(&zn->_periodic_scheduler, attr, task);
-    if (ret != _Z_RES_OK) {
-        z_free(task);
-        _Z_ERROR_RETURN(ret);
-    }
-    // Attach task
-    zn->_periodic_scheduler_task = task;
-    return ret;
-}
-#endif  // Z_FEATURE_PERIODIC_TASKS == 1
-#endif  // Z_FEATURE_UNSTABLE_API
-
-z_result_t _zp_stop_read_task(_z_session_t *zn) {
-    z_result_t ret = _Z_RES_OK;
-    // Call transport function
-    switch (zn->_tp._type) {
-        case _Z_TRANSPORT_UNICAST_TYPE:
-            ret = _zp_unicast_stop_read_task(&zn->_tp);
+            for (size_t i = 0; i < _ZP_ARRAY_SIZE(tasks); i++) {
+                if (tasks[i] == NULL) continue;
+                _z_fut_t f = _z_fut_null();
+                f._fut_arg = &zn->_tp._transport._raweth;
+                f._fut_fn = tasks[i];
+                _z_fut_handle_t h = _z_runtime_spawn(&zn->_runtime, &f);
+                if (_z_fut_handle_is_null(h)) {
+                    _Z_ERROR_RETURN(_Z_ERR_FAILED_TO_SPAWN_TASK);
+                }
+#if Z_FEATURE_AUTO_RECONNECT == 1
+                tc->_tasks._task_handles[i] = h;
+#endif
+            }
             break;
-        case _Z_TRANSPORT_MULTICAST_TYPE:
-            ret = _zp_multicast_stop_read_task(&zn->_tp);
-            break;
-        case _Z_TRANSPORT_RAWETH_TYPE:
-            ret = _zp_raweth_stop_read_task(&zn->_tp);
-            break;
+        }
+#endif
         default:
             _Z_ERROR_LOG(_Z_ERR_TRANSPORT_NOT_AVAILABLE);
-            ret = _Z_ERR_TRANSPORT_NOT_AVAILABLE;
+            return _Z_ERR_TRANSPORT_NOT_AVAILABLE;
             break;
     }
-    return ret;
-}
-
-z_result_t _zp_stop_lease_task(_z_session_t *zn) {
-    z_result_t ret = _Z_RES_OK;
-    // Call transport function
-    switch (zn->_tp._type) {
-        case _Z_TRANSPORT_UNICAST_TYPE:
-            ret = _zp_unicast_stop_lease_task(&zn->_tp);
-            break;
-        case _Z_TRANSPORT_MULTICAST_TYPE:
-            ret = _zp_multicast_stop_lease_task(&zn->_tp._transport._multicast);
-            break;
-        case _Z_TRANSPORT_RAWETH_TYPE:
-            ret = _zp_multicast_stop_lease_task(&zn->_tp._transport._raweth);
-            break;
-        default:
-            _Z_ERROR_LOG(_Z_ERR_TRANSPORT_NOT_AVAILABLE);
-            ret = _Z_ERR_TRANSPORT_NOT_AVAILABLE;
-            break;
-    }
-    return ret;
-}
-
-#ifdef Z_FEATURE_UNSTABLE_API
-#if Z_FEATURE_PERIODIC_TASKS == 1
-z_result_t _zp_stop_periodic_scheduler_task(_z_session_t *zn) {
-    if (zn->_periodic_scheduler_task == NULL) {
-        return _Z_ERR_INVALID;
-    }
-
-    z_result_t ret = _zp_periodic_scheduler_stop_task(&zn->_periodic_scheduler);
-    if (ret != _Z_RES_OK) {
-        _Z_ERROR_RETURN(ret);
-    }
-
-    ret = _z_task_join(zn->_periodic_scheduler_task);
-    if (ret != _Z_RES_OK) {
-        _Z_ERROR_RETURN(ret);
-    }
-
-    _z_task_t *task = zn->_periodic_scheduler_task;
-    zn->_periodic_scheduler_task = NULL;
-    z_free(task);
-
     return _Z_RES_OK;
 }
-#endif  // Z_FEATURE_PERIODIC_TASKS == 1
-#endif  // Z_FEATURE_UNSTABLE_API
-#endif  // Z_FEATURE_MULTI_THREAD == 1

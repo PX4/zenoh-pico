@@ -14,28 +14,39 @@
 #include "zenoh-pico/net/query.h"
 
 #include "zenoh-pico/net/session.h"
+#include "zenoh-pico/session/loopback.h"
+#include "zenoh-pico/session/query.h"
 #include "zenoh-pico/transport/common/tx.h"
+#include "zenoh-pico/utils/locality.h"
 #include "zenoh-pico/utils/logging.h"
 
 static void _z_query_clear_inner(_z_query_t *q) {
-    _z_keyexpr_clear(&q->_key);
+    _z_declared_keyexpr_clear(&q->_key);
     _z_value_clear(&q->_value);
     _z_bytes_drop(&q->_attachment);
     _z_string_clear(&q->_parameters);
     _z_session_weak_drop(&q->_zn);
 }
 
+z_result_t _z_session_send_reply_final(_z_session_t *session, uint32_t query_id, bool is_local) {
+    if (is_local) {
+        return _z_session_deliver_reply_final_locally(session, query_id);
+    } else {
+        _z_zenoh_message_t z_msg;
+        _z_n_msg_make_response_final(&z_msg, query_id);
+        z_result_t ret = _z_send_n_msg(session, &z_msg, Z_RELIABILITY_RELIABLE, Z_CONGESTION_CONTROL_BLOCK, NULL);
+        _z_msg_clear(&z_msg);
+        return ret;
+    }
+}
+
 z_result_t _z_query_send_reply_final(_z_query_t *q) {
-    // Try to upgrade session weak to rc
     _z_session_rc_t sess_rc = _z_session_weak_upgrade_if_open(&q->_zn);
     if (_Z_RC_IS_NULL(&sess_rc)) {
         _Z_ERROR_RETURN(_Z_ERR_TRANSPORT_TX_FAILED);
     }
-    _z_zenoh_message_t z_msg;
-    _z_n_msg_make_response_final(&z_msg, q->_request_id);
-    z_result_t ret =
-        _z_send_n_msg(_Z_RC_IN_VAL(&sess_rc), &z_msg, Z_RELIABILITY_RELIABLE, Z_CONGESTION_CONTROL_BLOCK, NULL);
-    _z_msg_clear(&z_msg);
+
+    z_result_t ret = _z_session_send_reply_final(_Z_RC_IN_VAL(&sess_rc), q->_request_id, q->_is_local);
     _z_session_rc_drop(&sess_rc);
     return ret;
 }
@@ -61,6 +72,7 @@ void _z_query_free(_z_query_t **query) {
 #if Z_FEATURE_QUERYABLE == 1
 void _z_queryable_clear(_z_queryable_t *qbl) {
     _z_session_weak_drop(&qbl->_zn);
+    _z_sync_group_drop(&qbl->_callback_drop_sync_group);
     *qbl = _z_queryable_null();
 }
 

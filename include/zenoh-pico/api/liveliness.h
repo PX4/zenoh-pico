@@ -27,7 +27,6 @@ extern "C" {
 
 typedef struct {
     uint32_t _id;
-    _z_keyexpr_t _key;
     _z_session_weak_t _zn;
 } _z_liveliness_token_t;
 
@@ -137,7 +136,7 @@ z_result_t z_liveliness_declare_background_subscriber(const z_loaned_session_t *
  * The options for :c:func:`z_liveliness_get()`
  *
  * Members:
- *   uint64_t timeout_ms: Liveliness query timeout in milliseconds.
+ *   uint64_t timeout_ms: Liveliness query timeout in milliseconds. 0 corresponds to default get request timeout.
  *   z_moved_cancellation_token_t *cancellation_token: Token to allow cancelling get operation (unstable).
  */
 typedef struct z_liveliness_get_options_t {

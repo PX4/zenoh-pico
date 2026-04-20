@@ -26,13 +26,17 @@ jobs:
     name: Run unit tests on ubuntu-latest
     runs-on: ubuntu-latest
     steps:
+      - name: Setup mbedtls
+        uses: eclipse-zenoh/ci/setup-mbedtls@main
+        with:
+          mbedtls-version: mbedtls-3.6.5
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Build & run tests
         run: |
-          sudo apt install -y ninja-build libmbedtls-dev
-          Z_FEATURE_LINK_TLS=1 Z_FEATURE_UNSTABLE_API=1 Z_FEATURE_PERIODIC_TASKS=1 CMAKE_GENERATOR=Ninja ASAN=ON make BUILD_TYPE=Debug test
+          sudo apt install -y ninja-build
+          Z_FEATURE_LINK_TLS=1 Z_FEATURE_LOCAL_QUERYABLE=1 Z_FEATURE_LOCAL_SUBSCRIBER=1 Z_FEATURE_UNSTABLE_API=1 CMAKE_GENERATOR=Ninja ASAN=ON make BUILD_TYPE=Debug test
 
   run_windows_test:
     name: Run peer unicast test on windows-latest
@@ -47,11 +51,10 @@ jobs:
           .\build\tests\Debug\z_test_peer_unicast.exe
         timeout-minutes: 15
         shell: cmd
-        env: 
+        env:
           ZENOH_LOG: INFO
           Z_FEATURE_UNSTABLE_API: 1
-          
-  
+
   memory_leak_unit_tests:
     name: Memory leak unit tests
     runs-on: ubuntu-latest
@@ -59,23 +62,28 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Setup mbedtls
+        uses: eclipse-zenoh/ci/setup-mbedtls@main
+        with:
+          mbedtls-version: mbedtls-3.6.5
+
       - name: Build tests
         run: |
-          sudo apt install -y ninja-build libmbedtls-dev
-          Z_FEATURE_LINK_TLS=1 Z_FEATURE_UNSTABLE_API=1 Z_FEATURE_PERIODIC_TASKS=1 CMAKE_GENERATOR=Ninja make BUILD_TYPE=Debug
+          sudo apt install -y ninja-build
+          Z_FEATURE_LINK_TLS=1 Z_FEATURE_LOCAL_QUERYABLE=1 Z_FEATURE_LOCAL_SUBSCRIBER=1 Z_FEATURE_UNSTABLE_API=1 CMAKE_GENERATOR=Ninja make BUILD_TYPE=Debug
 
       - name: Install valgrind
         run: |
           sudo apt update
           sudo apt install -y valgrind
-      
+
       - name: Memory leak unit tests
         run: |
           cd build/tests
           for test in *_test; do
             if [[ -x "$test" && ! -d "$test" ]]; then  # Run only executables
               echo "Running Valgrind on $test"
-              valgrind --leak-check=full --error-exitcode=1 "./$test" > /dev/null || exit 1
+              valgrind --leak-check=full --error-exitcode=1 --suppressions=valgrind.supp "./$test" > /dev/null || exit 1
             fi
           done
 
@@ -119,13 +127,18 @@ jobs:
     name: Build TLS transport on ubuntu-latest
     runs-on: ubuntu-latest
     steps:
+      - name: Setup mbedtls
+        uses: eclipse-zenoh/ci/setup-mbedtls@main
+        with:
+          mbedtls-version: mbedtls-3.6.5
+
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Build with TLS
         run: |
           sudo apt update
-          sudo apt install -y ninja-build libmbedtls-dev
+          sudo apt install -y ninja-build
           Z_FEATURE_LINK_TLS=1 CMAKE_GENERATOR=Ninja make
 
   zenoh_build:
@@ -211,7 +224,7 @@ jobs:
       - name: Build without scouting
         run: |
           sudo apt install -y ninja-build
-          Z_FEATURE_SCOUTING=0 CMAKE_GENERATOR=Ninja make      
+          Z_FEATURE_SCOUTING=0 CMAKE_GENERATOR=Ninja make
 
   no_interest_build:
     name: Check compilation without interests
@@ -261,6 +274,18 @@ jobs:
           sudo apt install -y ninja-build
           Z_FEATURE_UNSTABLE_API=1 Z_FEATURE_ADVANCED_SUBSCRIPTION=1 CMAKE_GENERATOR=Ninja make
 
+  rx_cache_build:
+    name: Check compilation with RX cache enabled
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build with RX cache
+        run: |
+          sudo apt install -y ninja-build
+          Z_FEATURE_RX_CACHE=1 CMAKE_GENERATOR=Ninja make
+
   gcc10_build:
     name: Check compilation with GCC 10
     runs-on: ubuntu-latest
@@ -270,6 +295,7 @@ jobs:
 
       - name: Build with GCC 10
         run: |
+          sudo apt update
           sudo apt install -y ninja-build gcc-10
           CC=gcc-10 Z_FEATURE_UNSTABLE_API=1 Z_FEATURE_ADVANCED_PUBLICATION=1 Z_FEATURE_ADVANCED_SUBSCRIPTION=1 CMAKE_GENERATOR=Ninja make
 
@@ -398,6 +424,11 @@ jobs:
     name: Test examples memory leak
     runs-on: ubuntu-latest
     steps:
+      - name: Setup mbedtls
+        uses: eclipse-zenoh/ci/setup-mbedtls@main
+        with:
+          mbedtls-version: mbedtls-3.6.5
+
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -423,11 +454,11 @@ jobs:
       - name: Build project
         run: |
           sudo apt install -y ninja-build
-          Z_FEATURE_UNSTABLE_API=1 Z_FEATURE_LIVELINESS=1 CMAKE_GENERATOR=Ninja make
+          Z_FEATURE_LINK_TLS=1 Z_FEATURE_LOCAL_QUERYABLE=1 Z_FEATURE_LOCAL_SUBSCRIBER=1 Z_FEATURE_UNSTABLE_API=1 Z_FEATURE_LIVELINESS=1 CMAKE_GENERATOR=Ninja make
 
       - name: Run test
         run: python3 -u ./build/tests/memory_leak.py
-        timeout-minutes: 15 
+        timeout-minutes: 15
 
       - name: Kill Zenoh router
         if: always()
@@ -446,10 +477,10 @@ jobs:
           CMAKE_GENERATOR=Ninja ASAN=ON make
           python3 ./build/tests/no_router.py
         timeout-minutes: 15
-  
+
   connection_restore_test:
     needs: zenoh_build
-    name: Connection restore test 
+    name: Connection restore test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -470,6 +501,60 @@ jobs:
           RUST_LOG=debug sudo python3 ./build/tests/connection_restore.py ./zenoh-standalone/zenohd
         timeout-minutes: 20
 
+  routed_peer_client_test:
+    needs: zenoh_build
+    name: Test routed peer client communication
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Zenoh artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.zenoh_build.outputs.artifact-name }}
+
+      - name: Unzip Zenoh artifacts
+        run: unzip ${{ needs.zenoh_build.outputs.artifact-name }} -d zenoh-standalone
+
+      - id: select-multicast-iface
+        name: Select multicast-capable interface
+        run: |
+          echo "Detecting multicast interface..."
+          # Pick first non-loopback, non-docker, non-veth interface
+          IFACE=$(ip -o link show | awk -F': ' '$2 != "lo" && $2 !~ /docker/ && $2 !~ /veth/ {print $2; exit}')
+          if [ -z "$IFACE" ]; then
+            echo "No suitable interface found, defaulting to eth0"
+            IFACE=eth0
+          fi
+          echo "Selected interface: $IFACE"
+          echo "iface=$IFACE" >> "$GITHUB_OUTPUT"
+
+      - id: run-zenoh
+        name: Run Zenoh router
+        run: |
+          IFACE=${{ steps.select-multicast-iface.outputs.iface }}
+          RUST_LOG=debug ./zenoh-standalone/zenohd -l tcp/127.0.0.1:7447 -l udp/224.0.0.123:7447#iface=$IFACE > zenohd.log 2>&1 &
+          echo "zenohd-pid=$!" >> $GITHUB_OUTPUT
+
+      - name: Build project and run test
+        run: |
+          sudo apt install -y ninja-build
+          Z_FEATURE_UNSTABLE_API=1 BATCH_MULTICAST_SIZE=8192 BATCH_UNICAST_SIZE=49152 CMAKE_GENERATOR=Ninja make
+          IFACE=${{ steps.select-multicast-iface.outputs.iface }}
+          python3 ./build/tests/routed_peer_client.py tcp/127.0.0.1:7447 udp/224.0.0.123:7447#iface=$IFACE
+        timeout-minutes: 15
+
+      - name: Kill Zenoh router
+        if: always()
+        run: kill ${{ steps.run-zenoh.outputs.zenohd-pid }}
+
+      - name: Print zenohd logs
+        if: always()
+        run: |
+          echo "===== ZENOH ROUTER LOGS ====="
+          cat zenohd.log || echo "zenohd.log not found"
+
   unicast_peer_test:
     name: P2p unicast test
     runs-on: ubuntu-latest
@@ -483,7 +568,7 @@ jobs:
           CMAKE_GENERATOR=Ninja make
           ./build/tests/z_test_peer_unicast
         env:
-          Z_FEATURE_UNSTABLE_API: 1 
+          Z_FEATURE_UNSTABLE_API: 1
           Z_FEATURE_UNICAST_PEER: 1
         timeout-minutes: 15
 
@@ -503,7 +588,7 @@ jobs:
           CMAKE_GENERATOR=Ninja make
           ./build/tests/z_test_peer_multicast
         env:
-          Z_FEATURE_UNSTABLE_API: 1 
+          Z_FEATURE_UNSTABLE_API: 1
           Z_FEATURE_MULTICAST_DECLARATIONS: ${{ matrix.feature_declarations }}
         timeout-minutes: 15
 
@@ -513,8 +598,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: DavidAnson/markdownlint-cli2-action@v18
         with:
-          config: '.markdownlint.yaml'
-          globs: '**/README.md'
+          config: ".markdownlint.yaml"
+          globs: "**/README.md"
 
   build_shared:
     name: Build shared libs
@@ -572,7 +657,41 @@ jobs:
   ci:
     name: CI status checks
     runs-on: ubuntu-latest
-    needs: [run_tests, check_format, c99_build, raweth_build, tls_build, zenoh_build, modular_build, unstable_build, no_interest_build, no_liveliness_build, st_build, fragment_test, attachment_test, memory_leak_test, no_router, connection_restore_test, markdown_lint, build_shared, build_static, integration, memory_leak_unit_tests, unicast_peer_test, multicast_peer_test, arduino_esp32, emscripten, espidf, freertos, mbed, rpi_pico, zephyr, codacy-security-scan, cpp_check]
+    needs:
+      [
+        run_tests,
+        check_format,
+        c99_build,
+        raweth_build,
+        tls_build,
+        zenoh_build,
+        modular_build,
+        unstable_build,
+        no_interest_build,
+        no_liveliness_build,
+        st_build,
+        fragment_test,
+        attachment_test,
+        memory_leak_test,
+        no_router,
+        connection_restore_test,
+        markdown_lint,
+        build_shared,
+        build_static,
+        integration,
+        memory_leak_unit_tests,
+        unicast_peer_test,
+        multicast_peer_test,
+        arduino_esp32,
+        emscripten,
+        espidf,
+        freertos,
+        mbed,
+        rpi_pico,
+        zephyr,
+        codacy-security-scan,
+        cpp_check,
+      ]
     if: always()
     steps:
       - name: Check whether all jobs pass

@@ -29,15 +29,35 @@ jobs:
       - name: Clone this repository
         uses: actions/checkout@v4
 
-      - name: Install TLS dependencies (Linux)
+      - name: Setup mbedtls
         if: runner.os == 'Linux'
-        run: |
-          sudo apt update
-          sudo apt install -y libmbedtls-dev
+        uses: eclipse-zenoh/ci/setup-mbedtls@main
+        with:
+          mbedtls-version: mbedtls-3.6.5
 
       - name: Install TLS dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew list mbedtls >/dev/null 2>&1 || brew install mbedtls
+        shell: bash
+        run: |
+          # Install mbedtls@3 if not installed
+          if ! brew list mbedtls@3 >/dev/null 2>&1; then
+            brew install mbedtls@3
+          fi
+
+          MBEDTLS_PREFIX="$(brew --prefix mbedtls@3)"
+
+          # Make this prefix available for later steps
+          echo "MBEDTLS_INSTALL=${MBEDTLS_PREFIX}" >> "$GITHUB_ENV"
+
+          # Let pkg-config find the v3 .pc files first
+          echo "PKG_CONFIG_PATH=${MBEDTLS_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
+
+          # Help CMake find it as a generic prefix
+          echo "CMAKE_PREFIX_PATH=${MBEDTLS_PREFIX}:${CMAKE_PREFIX_PATH}" >> "$GITHUB_ENV"
+
+          # Needed to *run* binaries/tests that link against libmbedtls.dylib
+          echo "LD_LIBRARY_PATH=${MBEDTLS_PREFIX}/lib:${LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+          echo "DYLD_LIBRARY_PATH=${MBEDTLS_PREFIX}/lib:${DYLD_LIBRARY_PATH}" >> "$GITHUB_ENV"
 
       - name: Compile debug
         run: make all
@@ -47,21 +67,23 @@ jobs:
           BUILD_INTEGRATION: ON
           Z_FEATURE_LINK_TLS: 1
           Z_FEATURE_UNSTABLE_API: 1
+          Z_FEATURE_LOCAL_QUERYABLE: 1
           Z_FEATURE_LOCAL_SUBSCRIBER: 1
-          Z_FEATURE_PERIODIC_TASKS: 1
           Z_FEATURE_ADVANCED_PUBLICATION: 1
           Z_FEATURE_ADVANCED_SUBSCRIPTION: 1
+          Z_FEATURE_ADMIN_SPACE: 1
 
       - name: Test debug
         run: make test
-        timeout-minutes: 30
+        timeout-minutes: 40
         env:
           BUILD_TYPE: Debug # Workaround for Windows as it seems the previous step is being ignored
           BUILD_TESTING: OFF # Workaround for Windows as it seems the previous step is being ignored
           BUILD_INTEGRATION: ON # Workaround for Windows as it seems the previous step is being ignored
           Z_FEATURE_LINK_TLS: 1
-          Z_FEATURE_UNSTABLE_API: 1
+          Z_FEATURE_LOCAL_QUERYABLE: 1
           Z_FEATURE_LOCAL_SUBSCRIBER: 1
+          Z_FEATURE_UNSTABLE_API: 1
           ZENOH_BRANCH: main
 
   asan-build:
@@ -74,11 +96,11 @@ jobs:
       - name: Clone this repository
         uses: actions/checkout@v4
 
-      - name: Install TLS dependencies (Linux)
+      - name: Setup mbedtls (Linux)
         if: runner.os == 'Linux'
-        run: |
-          sudo apt update
-          sudo apt install -y libmbedtls-dev
+        uses: eclipse-zenoh/ci/setup-mbedtls@main
+        with:
+          mbedtls-version: mbedtls-3.6.5
 
       - name: Install TLS dependencies (macOS)
         if: runner.os == 'macOS'
@@ -92,15 +114,15 @@ jobs:
           BUILD_INTEGRATION: ON
           Z_FEATURE_LINK_TLS: 1
           Z_FEATURE_UNSTABLE_API: 1
+          Z_FEATURE_LOCAL_QUERYABLE: 1
           Z_FEATURE_LOCAL_SUBSCRIBER: 1
-          Z_FEATURE_PERIODIC_TASKS: 1
           Z_FEATURE_ADVANCED_PUBLICATION: 1
           Z_FEATURE_ADVANCED_SUBSCRIPTION: 1
           ASAN: 1
 
       - name: Test debug
         run: make test
-        timeout-minutes: 30
+        timeout-minutes: 40
         env:
           BUILD_TYPE: Debug # Workaround for Windows as it seems the previous step is being ignored
           BUILD_TESTING: OFF # Workaround for Windows as it seems the previous step is being ignored
