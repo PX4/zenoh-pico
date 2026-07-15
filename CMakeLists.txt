@@ -29,13 +29,13 @@ set(ZENOH_PICO_TWEAK ${PROJECT_VERSION_TWEAK})
 
 configure_file(
   ${CMAKE_CURRENT_SOURCE_DIR}/include/zenoh-pico.h.in
-  ${CMAKE_CURRENT_SOURCE_DIR}/include/zenoh-pico.h
+  ${CMAKE_CURRENT_BINARY_DIR}/include/zenoh-pico.h
   @ONLY
 )
 
 configure_file(
   ${CMAKE_CURRENT_SOURCE_DIR}/library.json.in
-  ${CMAKE_CURRENT_SOURCE_DIR}/library.json
+  ${CMAKE_CURRENT_BINARY_DIR}/library.json
   @ONLY
 )
 
@@ -337,13 +337,13 @@ message(STATUS "Building with feature config:\n\
 
 configure_file(
   ${CMAKE_CURRENT_SOURCE_DIR}/include/zenoh-pico.h.in
-  ${CMAKE_CURRENT_SOURCE_DIR}/include/zenoh-pico.h
+  ${CMAKE_CURRENT_BINARY_DIR}/include/zenoh-pico.h
   @ONLY
 )
 
 configure_file(
   ${CMAKE_CURRENT_SOURCE_DIR}/include/zenoh-pico/config.h.in
-  ${CMAKE_CURRENT_SOURCE_DIR}/include/zenoh-pico/config.h
+  ${CMAKE_CURRENT_BINARY_DIR}/include/zenoh-pico/config.h
   @ONLY
 )
 
@@ -390,12 +390,14 @@ file(GLOB_RECURSE PublicHeaders
 if(PICO_STATIC)
   target_include_directories(${Libname}_static
     PUBLIC
+      $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include>
       $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
       $<INSTALL_INTERFACE:include>)
 endif()
 if(PICO_SHARED)
   target_include_directories(${Libname}_shared
     PUBLIC
+      $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include>
       $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
       $<INSTALL_INTERFACE:include>)
 endif()
