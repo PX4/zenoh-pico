@@ -117,7 +117,7 @@ z_result_t _z_multicast_transport_create(_z_transport_t *zt, _z_link_t *zl,
         ztm->_common._link = zl;
 
         // Mark TX as ready only after all init is complete
-        _z_atomic_bool_init(&ztm->_common._tx_ready, true);
+        _z_atomic_bool_store(&ztm->_common._tx_ready, true, _z_memory_order_release);
     }
     return ret;
 }

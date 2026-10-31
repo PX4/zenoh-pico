@@ -76,7 +76,7 @@ static z_result_t _z_unicast_transport_create_inner(_z_transport_unicast_t *ztu,
     ztu->_pending_peers = _z_pending_peers_null();
 
     // Mark TX as ready only after all init is complete
-    _z_atomic_bool_init(&ztu->_common._tx_ready, true);
+    _z_atomic_bool_store(&ztu->_common._tx_ready, true, _z_memory_order_release);
     return _Z_RES_OK;
 }
 
