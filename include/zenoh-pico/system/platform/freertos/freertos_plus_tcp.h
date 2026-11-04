@@ -64,6 +64,8 @@ typedef struct {
     StaticSemaphore_t sem_buffer;
 #endif /* SUPPORT_STATIC_ALLOCATION */
 } _z_condvar_t;
+
+typedef TaskHandle_t _z_task_id_t;
 #endif  // Z_MULTI_THREAD == 1
 
 typedef TickType_t z_clock_t;
@@ -71,7 +73,7 @@ typedef struct timeval z_time_t;
 
 typedef struct {
     union {
-#if Z_FEATURE_LINK_TCP == 1 || Z_FEATURE_LINK_UDP_MULTICAST == 1 || Z_FEATURE_LINK_UDP_UNICAST == 1
+#if defined(ZP_PLATFORM_SOCKET_LINKS_ENABLED)
         Socket_t _socket;
 #endif
     };
@@ -79,7 +81,7 @@ typedef struct {
 
 typedef struct {
     union {
-#if Z_FEATURE_LINK_TCP == 1 || Z_FEATURE_LINK_UDP_MULTICAST == 1 || Z_FEATURE_LINK_UDP_UNICAST == 1
+#if defined(ZP_PLATFORM_SOCKET_LINKS_ENABLED)
         struct freertos_addrinfo *_iptcp;
 #endif
     };

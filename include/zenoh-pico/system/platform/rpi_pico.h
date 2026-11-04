@@ -51,6 +51,7 @@ typedef struct {
     SemaphoreHandle_t sem;
     int waiters;
 } _z_condvar_t;
+typedef TaskHandle_t _z_task_id_t;
 #endif  // Z_MULTI_THREAD == 1
 
 typedef struct timespec z_clock_t;
@@ -58,7 +59,7 @@ typedef struct timeval z_time_t;
 
 typedef struct {
     union {
-#if Z_FEATURE_LINK_TCP == 1 || Z_FEATURE_LINK_UDP_MULTICAST == 1 || Z_FEATURE_LINK_UDP_UNICAST == 1
+#if defined(ZP_PLATFORM_SOCKET_LINKS_ENABLED)
         int _fd;
 #endif
 #if Z_FEATURE_LINK_SERIAL == 1
@@ -69,11 +70,25 @@ typedef struct {
 
 typedef struct {
     union {
-#if Z_FEATURE_LINK_TCP == 1 || Z_FEATURE_LINK_UDP_MULTICAST == 1 || Z_FEATURE_LINK_UDP_UNICAST == 1
+#if defined(ZP_PLATFORM_SOCKET_LINKS_ENABLED)
         struct addrinfo *_iptcp;
 #endif
     };
 } _z_sys_net_endpoint_t;
+
+#if defined(ZP_PLATFORM_SOCKET_LWIP) && defined(ZP_PLATFORM_SOCKET_LINKS_ENABLED)
+#define ZP_LWIP_SOCKET_HELPERS_DEFINED 1
+static inline int _z_lwip_socket_get(_z_sys_net_socket_t sock) { return sock._fd; }
+static inline void _z_lwip_socket_set(_z_sys_net_socket_t *sock, int fd) { sock->_fd = fd; }
+#endif
+
+#if Z_FEATURE_LINK_BLUETOOTH == 1
+#error "Bluetooth not supported yet on Raspberry Pi Pico W port of Zenoh-Pico"
+#endif
+
+#if Z_FEATURE_RAWETH_TRANSPORT == 1
+#error "Raw ethernet transport not supported yet on Raspberry Pi Pico W port of Zenoh-Pico"
+#endif
 
 #ifdef __cplusplus
 }

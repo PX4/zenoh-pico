@@ -55,13 +55,6 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    // Start read and lease tasks for zenoh-pico
-    if (zp_start_read_task(z_loan_mut(s), NULL) < 0 || zp_start_lease_task(z_loan_mut(s), NULL) < 0) {
-        printf("Unable to start read and lease tasks\n");
-        z_session_drop(z_session_move(&s));
-        return -1;
-    }
-
     const char *ke = selector;
     size_t ke_len = strlen(ke);
     const char *params = strchr(selector, '?');
@@ -103,7 +96,7 @@ int main(int argc, char **argv) {
     char buf[256];
     for (int idx = 0; idx != n; ++idx) {
         z_sleep_s(1);
-        sprintf(buf, "[%4d] %s", idx, value ? value : "");
+        snprintf(buf, sizeof(buf), "[%4d] %s", idx, value ? value : "");
         printf("Querying '%s' with payload '%s'...\n", selector, buf);
         z_querier_get_options_t get_options;
         z_querier_get_options_default(&get_options);

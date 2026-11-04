@@ -16,6 +16,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -72,6 +73,24 @@ z_result_t _z_config_get_all(const _z_config_t *ps, _z_string_svec_t *locators, 
     return _Z_RES_OK;
 }
 
+z_result_t _z_config_get_i32_default(_z_config_t *config, uint8_t key, const char *default_val, int32_t *out) {
+    const char *s = _z_config_get(config, key);
+    if (s == NULL) {
+        s = default_val;
+    }
+
+    return _z_str_parse_i32(s, out) ? _Z_RES_OK : _Z_ERR_CONFIG_INVALID_VALUE;
+}
+
+z_result_t _z_config_get_bool_default(_z_config_t *config, uint8_t key, const char *default_val, bool *out) {
+    const char *s = _z_config_get(config, key);
+    if (s == NULL) {
+        s = default_val;
+    }
+
+    return _z_str_parse_bool(s, out) ? _Z_RES_OK : _Z_ERR_CONFIG_INVALID_VALUE;
+}
+
 /*------------------ int-string map ------------------*/
 z_result_t _z_str_intmap_from_strn(_z_str_intmap_t *strint, const char *s, uint8_t argc, _z_str_intmapping_t argv[],
                                    size_t n) {
@@ -86,7 +105,10 @@ z_result_t _z_str_intmap_from_strn(_z_str_intmap_t *strint, const char *s, uint8
         const char *p_key_start = start;
         const char *p_key_end = memchr(p_key_start, INT_STR_MAP_KEYVALUE_SEPARATOR, curr_len);
 
-        if (p_key_end != NULL) {
+        if (p_key_end == NULL) {
+            _Z_ERROR_LOG(_Z_ERR_CONFIG_INVALID_VALUE);
+            return _Z_ERR_CONFIG_INVALID_VALUE;
+        } else {
             // Verify the key is valid based on the provided mapping
             size_t p_key_len = _z_ptr_char_diff(p_key_end, p_key_start);
             bool found = false;
@@ -162,27 +184,40 @@ size_t _z_str_intmap_strlen(const _z_str_intmap_t *s, uint8_t argc, _z_str_intma
 
 void _z_str_intmap_onto_str(char *dst, size_t dst_len, const _z_str_intmap_t *s, uint8_t argc,
                             _z_str_intmapping_t argv[]) {
-    size_t len = dst_len;
+    if (dst == NULL || dst_len == 0) {
+        return;
+    }
+
+    // Remaining length excluding '\0'
+    size_t len = dst_len - (size_t)1;
     dst[0] = '\0';
     for (size_t i = 0; i < argc; i++) {
         char *v = _z_str_intmap_get(s, argv[i]._key);
         if (v != NULL) {
-            if (len > (size_t)0) {
+            if (len > (size_t)0 && dst[0] != '\0') {
                 _z_str_append(dst, INT_STR_MAP_LIST_SEPARATOR);  // List separator
                 len = len - (size_t)1;
             }
 
+            size_t key_len = strnlen(argv[i]._str, len);
             if (len > (size_t)0) {
-                (void)strncat(dst, argv[i]._str, len);  // Key
-                len = len - strlen(argv[i]._str);
+                size_t n = key_len < len ? key_len : len;
+                // Flawfinder: ignore [CWE-120]
+                (void)strncat(dst, argv[i]._str, n);  // Key
+                len = len - n;
             }
+
             if (len > (size_t)0) {
                 _z_str_append(dst, INT_STR_MAP_KEYVALUE_SEPARATOR);  // KeyValue separator
                 len = len - (size_t)1;
             }
+
+            size_t value_len = strnlen(v, len);
             if (len > (size_t)0) {
-                (void)strncat(dst, v, len);  // Value
-                len = len - strlen(v);
+                size_t n = value_len < len ? value_len : len;
+                // Flawfinder: ignore [CWE-120]
+                (void)strncat(dst, v, n);  // Value
+                len = len - n;
             }
         }
     }

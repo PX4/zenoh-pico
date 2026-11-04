@@ -35,6 +35,7 @@ typedef pthread_attr_t z_task_attr_t;
 typedef pthread_mutex_t _z_mutex_t;
 typedef pthread_mutex_t _z_mutex_rec_t;
 typedef pthread_cond_t _z_condvar_t;
+typedef pthread_t _z_task_id_t;
 #endif  // Z_FEATURE_MULTI_THREAD == 1
 
 typedef struct timespec z_clock_t;
@@ -43,7 +44,7 @@ typedef struct timeval z_time_t;
 typedef struct {
     union {
 #if Z_FEATURE_LINK_TCP == 1 || Z_FEATURE_LINK_UDP_MULTICAST == 1 || Z_FEATURE_LINK_UDP_UNICAST == 1 || \
-    Z_FEATURE_RAWETH_TRANSPORT == 1
+    Z_FEATURE_RAWETH_TRANSPORT == 1 || Z_FEATURE_LINK_SERIAL == 1
         int _fd;
 #endif
     };

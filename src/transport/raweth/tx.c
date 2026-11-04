@@ -16,14 +16,16 @@
 
 #include "zenoh-pico/transport/common/tx.h"
 
+#include <string.h>
+
 #include "zenoh-pico/api/primitives.h"
 #include "zenoh-pico/config.h"
+#include "zenoh-pico/link/transport/raweth.h"
 #include "zenoh-pico/protocol/codec/core.h"
 #include "zenoh-pico/protocol/codec/network.h"
 #include "zenoh-pico/protocol/codec/transport.h"
 #include "zenoh-pico/protocol/iobuf.h"
-#include "zenoh-pico/protocol/keyexpr.h"
-#include "zenoh-pico/system/link/raweth.h"
+#include "zenoh-pico/session/keyexpr.h"
 #include "zenoh-pico/transport/multicast/transport.h"
 #include "zenoh-pico/transport/transport.h"
 #include "zenoh-pico/transport/utils.h"
@@ -35,7 +37,8 @@ static int _zp_raweth_find_map_entry(const _z_keyexpr_t *keyexpr, _z_raweth_sock
     for (size_t i = 0; i < _zp_raweth_mapping_array_len(&sock->_mapping); i++) {
         // Find matching keyexpr
         const _zp_raweth_mapping_entry_t *entry = _zp_raweth_mapping_array_get(&sock->_mapping, i);
-        if (z_keyexpr_intersects(keyexpr, &entry->_keyexpr) != _Z_RES_OK) {
+        _z_keyexpr_t entry_ke = _z_keyexpr_alias_from_string(&entry->_keyexpr);
+        if (!z_keyexpr_intersects(keyexpr, &entry_ke)) {
             continue;
         }
         return (int)i;
@@ -52,11 +55,11 @@ static z_result_t _zp_raweth_set_socket(const _z_keyexpr_t *keyexpr, _z_raweth_s
     if (keyexpr == NULL) {
         // Store default value into socket
         const _zp_raweth_mapping_entry_t *entry = _zp_raweth_mapping_array_get(&sock->_mapping, 0);
-        memcpy(&sock->_dmac, &entry->_dmac, _ZP_MAC_ADDR_LENGTH);
-        uint16_t vlan = entry->_vlan;
+        // Flawfinder: ignore [CWE-120] - fixed-size MAC copy, both operands are _ZP_MAC_ADDR_LENGTH bytes.
+        memcpy(sock->_dmac, entry->_dmac, _ZP_MAC_ADDR_LENGTH);
         sock->_has_vlan = entry->_has_vlan;
         if (sock->_has_vlan) {
-            memcpy(&sock->_vlan, &vlan, sizeof(vlan));
+            sock->_vlan = entry->_vlan;
         }
     } else {
         // Find config entry (linear)
@@ -65,15 +68,15 @@ static z_result_t _zp_raweth_set_socket(const _z_keyexpr_t *keyexpr, _z_raweth_s
         if (idx < 0) {
             idx = 0;  // Set to default entry
             _Z_DEBUG("Key '%.*s' wasn't found in config mapping, sending to default address",
-                     (int)_z_string_len(&keyexpr->_suffix), _z_string_data(&keyexpr->_suffix));
+                     (int)_z_string_len(&keyexpr), _z_string_data(&keyexpr));
         }
         // Store data into socket
         const _zp_raweth_mapping_entry_t *entry = _zp_raweth_mapping_array_get(&sock->_mapping, (size_t)idx);
-        memcpy(&sock->_dmac, &entry->_dmac, _ZP_MAC_ADDR_LENGTH);
-        uint16_t vlan = entry->_vlan;
+        // Flawfinder: ignore [CWE-120] - fixed-size MAC copy, both operands are _ZP_MAC_ADDR_LENGTH bytes.
+        memcpy(sock->_dmac, entry->_dmac, _ZP_MAC_ADDR_LENGTH);
         sock->_has_vlan = entry->_has_vlan;
         if (sock->_has_vlan) {
-            memcpy(&sock->_vlan, &vlan, sizeof(vlan));
+            sock->_vlan = entry->_vlan;
         }
     }
     return ret;
@@ -121,8 +124,10 @@ static z_result_t __unsafe_z_raweth_write_header(_z_link_t *zl, _z_wbuf_t *wbf) 
         _zp_eth_vlan_header_t header;
         // Set header
         memset(&header, 0, sizeof(header));
-        memcpy(&header.dmac, &resocket->_dmac, _ZP_MAC_ADDR_LENGTH);
-        memcpy(&header.smac, &resocket->_smac, _ZP_MAC_ADDR_LENGTH);
+        // Flawfinder: ignore [CWE-120] - fixed-size MAC copy, both operands are _ZP_MAC_ADDR_LENGTH bytes.
+        memcpy(header.dmac, resocket->_dmac, _ZP_MAC_ADDR_LENGTH);
+        // Flawfinder: ignore [CWE-120] - fixed-size MAC copy, both operands are _ZP_MAC_ADDR_LENGTH bytes.
+        memcpy(header.smac, resocket->_smac, _ZP_MAC_ADDR_LENGTH);
         header.vlan_type = _ZP_ETH_TYPE_VLAN;
         header.tag = resocket->_vlan;
         header.ethtype = resocket->_ethtype;
@@ -132,8 +137,10 @@ static z_result_t __unsafe_z_raweth_write_header(_z_link_t *zl, _z_wbuf_t *wbf) 
     } else {
         _zp_eth_header_t header;
         // Set header
-        memcpy(&header.dmac, &resocket->_dmac, _ZP_MAC_ADDR_LENGTH);
-        memcpy(&header.smac, &resocket->_smac, _ZP_MAC_ADDR_LENGTH);
+        // Flawfinder: ignore [CWE-120] - fixed-size MAC copy, both operands are _ZP_MAC_ADDR_LENGTH bytes.
+        memcpy(header.dmac, resocket->_dmac, _ZP_MAC_ADDR_LENGTH);
+        // Flawfinder: ignore [CWE-120] - fixed-size MAC copy, both operands are _ZP_MAC_ADDR_LENGTH bytes.
+        memcpy(header.smac, resocket->_smac, _ZP_MAC_ADDR_LENGTH);
         header.ethtype = resocket->_ethtype;
         header.data_length = _z_raweth_htons((uint16_t)(wpos - sizeof(header)));
         // Write header
@@ -196,6 +203,13 @@ z_result_t _z_raweth_send_t_msg(_z_transport_common_t *ztc, const _z_transport_m
     _Z_DEBUG(">> send session message");
 
     _z_transport_tx_mutex_lock(ztc, true);
+    ret = _z_transport_tx_check_ready(ztc);
+    if (ret != _Z_RES_OK) {
+        _Z_INFO("Dropping zenoh message because transport is not ready");
+        _z_transport_tx_mutex_unlock(ztc);
+        return ret;
+    }
+
     // Reset wbuf
     _z_wbuf_reset(&ztc->_wbuf);
     // Set socket info
@@ -225,6 +239,12 @@ z_result_t _z_raweth_send_n_msg(_z_session_t *zn, const _z_network_message_t *n_
     ret = _z_transport_tx_mutex_lock(&ztm->_common, cong_ctrl == Z_CONGESTION_CONTROL_BLOCK);
     if (ret != _Z_RES_OK) {
         _Z_INFO("Dropping zenoh message because of congestion control");
+        return ret;
+    }
+    ret = _z_transport_tx_check_ready(&ztm->_common);
+    if (ret != _Z_RES_OK) {
+        _Z_INFO("Dropping zenoh message because transport is not ready");
+        _z_transport_tx_mutex_unlock(&ztm->_common);
         return ret;
     }
     const _z_keyexpr_t *keyexpr = NULL;

@@ -32,6 +32,7 @@ typedef void *z_task_attr_t;   // Workaround as MBED is a C++ library
 typedef void *_z_mutex_t;      // Workaround as MBED is a C++ library
 typedef void *_z_mutex_rec_t;  // Workaround as MBED is a C++ library
 typedef void *_z_condvar_t;    // Workaround as MBED is a C++ library
+typedef void *_z_task_id_t;    // osThreadId_t is defined as void* in MBED
 #endif                         // Z_FEATURE_MULTI_THREAD == 1
 
 typedef struct timespec z_clock_t;
@@ -60,7 +61,7 @@ typedef struct {
 typedef struct {
     bool _err;
     union {
-#if Z_FEATURE_LINK_TCP == 1 || Z_FEATURE_LINK_UDP_MULTICAST == 1 || Z_FEATURE_LINK_UDP_UNICAST == 1
+#if defined(ZP_PLATFORM_SOCKET_LINKS_ENABLED)
         SocketAddress *_iptcp;  // As pointer to cross the boundary between C and C++
 #endif
     };

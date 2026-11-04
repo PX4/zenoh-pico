@@ -154,14 +154,19 @@ z_result_t _z_locator_metadata_from_string(_z_str_intmap_t *strint, const _z_str
         return _Z_RES_OK;
     }
 
-    const char *p_end = (char *)memchr(_z_string_data(str), ENDPOINT_CONFIG_SEPARATOR, _z_string_len(str));
+    size_t curr_len = _z_string_len(str) - start_offset;
+    const char *p_end = memchr(p_start, ENDPOINT_CONFIG_SEPARATOR, curr_len);
     if (p_end == NULL) {
-        p_end = _z_cptr_char_offset(_z_string_data(str), (ptrdiff_t)_z_string_len(str) + 1);
+        p_end = _z_cptr_char_offset(p_start, (ptrdiff_t)curr_len);
     }
 
     if (p_start != p_end) {
         size_t p_len = _z_ptr_char_diff(p_end, p_start);
-        return _z_str_intmap_from_strn(strint, p_start, 0, NULL, p_len);
+        z_result_t ret = _z_str_intmap_from_strn(strint, p_start, 0, NULL, p_len);
+        if (ret == _Z_ERR_CONFIG_INVALID_VALUE) {
+            return _Z_ERR_CONFIG_LOCATOR_INVALID;
+        }
+        return ret;
     }
     return _Z_RES_OK;
 }
@@ -268,7 +273,21 @@ _z_string_t _z_locator_to_string(const _z_locator_t *loc) {
     return s;
 }
 
-char *_z_endpoint_parse_host(_z_string_t *addr) {
+static const char *_z_endpoint_rchr(const _z_string_t *addr, char filter) {
+    const char *addr_data = _z_string_data(addr);
+    size_t addr_len = _z_string_len(addr);
+
+    while (addr_len > 0) {
+        addr_len--;
+        if (addr_data[addr_len] == filter) {
+            return &addr_data[addr_len];
+        }
+    }
+
+    return NULL;
+}
+
+char *_z_endpoint_parse_host(const _z_string_t *addr) {
     if (addr == NULL) {
         return NULL;
     }
@@ -279,7 +298,7 @@ char *_z_endpoint_parse_host(_z_string_t *addr) {
         return NULL;
     }
 
-    const char *colon = _z_string_rchr(addr, ':');
+    const char *colon = _z_endpoint_rchr(addr, ':');
     if (colon == NULL) {
         return NULL;
     }
@@ -306,7 +325,7 @@ char *_z_endpoint_parse_host(_z_string_t *addr) {
     return host_copy;
 }
 
-char *_z_endpoint_parse_port(_z_string_t *addr) {
+char *_z_endpoint_parse_port(const _z_string_t *addr) {
     if (addr == NULL) {
         return NULL;
     }
@@ -317,7 +336,7 @@ char *_z_endpoint_parse_port(_z_string_t *addr) {
         return NULL;
     }
 
-    const char *colon = _z_string_rchr(addr, ':');
+    const char *colon = _z_endpoint_rchr(addr, ':');
     if (colon == NULL) {
         return NULL;
     }
@@ -541,6 +560,12 @@ _z_string_t _z_endpoint_to_string(const _z_endpoint_t *endpoint) {
     // Reconstruct the endpoint as a string
     ret = _z_string_preallocate(curr_len);
     if (!_z_string_check(&ret)) {
+        // cppcheck-suppress misra-c2012-17.3
+        _z_string_clear(&locator);
+        if (config != NULL) {
+            // cppcheck-suppress misra-c2012-17.3
+            z_free(config);
+        }
         return ret;
     }
     // Copy locator
@@ -550,6 +575,8 @@ _z_string_t _z_endpoint_to_string(const _z_endpoint_t *endpoint) {
     // Copy config
     if (config != NULL) {
         memcpy(curr_dst, config, config_len);
+        // cppcheck-suppress misra-c2012-17.3
+        z_free(config);
     }
     // Clean up
     _z_string_clear(&locator);

@@ -25,6 +25,14 @@
 #include "zenoh-pico/utils/endianness.h"
 #include "zenoh-pico/utils/logging.h"
 
+#if defined(Z_TEST_HOOKS)
+#include "zenoh-pico/session/loopback.h"
+
+static _z_session_send_override_fn _z_send_n_msg_override = NULL;
+
+void _z_transport_set_send_n_msg_override(_z_session_send_override_fn fn) { _z_send_n_msg_override = fn; }
+#endif
+
 /*------------------ Transmission helper ------------------*/
 
 static inline bool _z_transport_tx_get_express_status(const _z_network_message_t *msg) {
@@ -264,6 +272,12 @@ z_result_t _z_transport_tx_send_t_msg(_z_transport_common_t *ztc, const _z_trans
     _Z_DEBUG("Send session message");
     // If sending to a peer list, make sure the peer mutex is locked
     _z_transport_tx_mutex_lock(ztc, true);
+    ret = _z_transport_tx_check_ready(ztc);
+    if (ret != _Z_RES_OK) {
+        _Z_INFO("Dropping zenoh message because transport is not ready");
+        _z_transport_tx_mutex_unlock(ztc);
+        return ret;
+    }
 
     ret = _z_transport_tx_send_t_msg_inner(ztc, t_msg, peers);
 
@@ -289,6 +303,15 @@ static z_result_t _z_transport_tx_send_n_msg(_z_transport_common_t *ztc, const _
         _Z_INFO("Dropping zenoh message because of congestion control");
         return ret;
     }
+
+    ret = _z_transport_tx_check_ready(ztc);
+    if (ret != _Z_RES_OK) {
+        _Z_INFO("Dropping zenoh message because transport is not ready");
+        if (!_z_transport_batch_hold_tx_mutex()) {
+            _z_transport_tx_mutex_unlock(ztc);
+        }
+        return ret;
+    }
     // Process message
     ret = _z_transport_tx_send_n_msg_inner(ztc, n_msg, reliability, peers);
     if (!_z_transport_batch_hold_tx_mutex()) {
@@ -309,6 +332,15 @@ static z_result_t _z_transport_tx_send_n_batch(_z_transport_common_t *ztc, z_con
         }
         if (ret != _Z_RES_OK) {
             _Z_INFO("Dropping zenoh batch because of congestion control");
+            return ret;
+        }
+
+        ret = _z_transport_tx_check_ready(ztc);
+        if (ret != _Z_RES_OK) {
+            _Z_INFO("Dropping zenoh batch because transport is not ready");
+            if (!_z_transport_batch_hold_tx_mutex()) {
+                _z_transport_tx_mutex_unlock(ztc);
+            }
             return ret;
         }
         // Send batch
@@ -477,6 +509,15 @@ z_result_t __unsafe_z_serialize_zenoh_fragment(_z_wbuf_t *dst, _z_wbuf_t *src, z
 
 z_result_t _z_send_n_msg(_z_session_t *zn, const _z_network_message_t *z_msg, z_reliability_t reliability,
                          z_congestion_control_t cong_ctrl, void *peer) {
+#if defined(Z_TEST_HOOKS)
+    if (_z_send_n_msg_override != NULL) {
+        bool handled = false;
+        z_result_t override_ret = _z_send_n_msg_override(zn, z_msg, reliability, cong_ctrl, peer, &handled);
+        if (handled) {
+            return override_ret;
+        }
+    }
+#endif
     z_result_t ret = _Z_RES_OK;
     // Call transport function
     switch (zn->_tp._type) {

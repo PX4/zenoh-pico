@@ -39,6 +39,7 @@ typedef void *z_task_attr_t;  // Not used in Windows
 typedef SRWLOCK _z_mutex_t;
 typedef CRITICAL_SECTION _z_mutex_rec_t;
 typedef CONDITION_VARIABLE _z_condvar_t;
+typedef DWORD _z_task_id_t;
 #endif  // Z_FEATURE_MULTI_THREAD == 1
 
 typedef LARGE_INTEGER z_clock_t;
@@ -46,7 +47,7 @@ typedef struct timeb z_time_t;
 
 typedef struct {
     union {
-#if Z_FEATURE_LINK_TCP == 1 || Z_FEATURE_LINK_UDP_MULTICAST == 1 || Z_FEATURE_LINK_UDP_UNICAST == 1
+#if defined(ZP_PLATFORM_SOCKET_LINKS_ENABLED)
         SOCKET _fd;
 #endif
     } _sock;
@@ -54,7 +55,7 @@ typedef struct {
 
 typedef struct {
     union {
-#if Z_FEATURE_LINK_TCP == 1 || Z_FEATURE_LINK_UDP_MULTICAST == 1 || Z_FEATURE_LINK_UDP_UNICAST == 1
+#if defined(ZP_PLATFORM_SOCKET_LINKS_ENABLED)
         struct addrinfo *_iptcp;
 #endif
     } _ep;

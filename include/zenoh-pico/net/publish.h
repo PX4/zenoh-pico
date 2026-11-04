@@ -15,6 +15,7 @@
 #ifndef INCLUDE_ZENOH_PICO_NET_PUBLISH_H
 #define INCLUDE_ZENOH_PICO_NET_PUBLISH_H
 
+#include "zenoh-pico/api/constants.h"
 #include "zenoh-pico/net/filtering.h"
 #include "zenoh-pico/net/session.h"
 #include "zenoh-pico/protocol/core.h"
@@ -27,7 +28,7 @@ extern "C" {
  * Return type when declaring a publisher.
  */
 typedef struct _z_publisher_t {
-    _z_keyexpr_t _key;
+    _z_declared_keyexpr_t _key;
     _z_zint_t _id;
     _z_session_weak_t _zn;
     _z_encoding_t _encoding;
@@ -35,6 +36,7 @@ typedef struct _z_publisher_t {
     z_priority_t _priority;
     z_reliability_t reliability;
     bool _is_express;
+    z_locality_t _allowed_destination;
     _z_write_filter_t _filter;
 } _z_publisher_t;
 

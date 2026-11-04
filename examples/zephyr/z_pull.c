@@ -33,7 +33,7 @@ const size_t INTERVAL = 5000;
 const size_t SIZE = 3;
 
 int main(int argc, char **argv) {
-    sleep(5);
+    z_sleep_s(5);
 
     // Initialize Zenoh Session and other parameters
     z_owned_config_t config;
@@ -55,13 +55,6 @@ int main(int argc, char **argv) {
         return -1;
     }
     printf("OK\n");
-
-    // Start read and lease tasks for zenoh-pico
-    if (zp_start_read_task(z_loan_mut(s), NULL) < 0 || zp_start_lease_task(z_loan_mut(s), NULL) < 0) {
-        printf("Unable to start read and lease tasks\n");
-        z_session_drop(z_session_move(&s));
-        return -1;
-    }
 
     printf("Declaring Subscriber on '%s'...\n", KEYEXPR);
     z_owned_closure_sample_t closure;

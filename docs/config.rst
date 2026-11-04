@@ -12,21 +12,21 @@
 ..   ZettaScale Zenoh Team, <zenoh@zettascale.tech>
 ..
 
-********
+*************
 Configuration
-********
+*************
 
 Zenoh-Pico has many run-time and compile-time configuration options. Some are passed as flags by the build system (make, cmake) while others can be modified manually. 
 
-All of those options are visible in `include/zenoh-pico/config.h`.
+All of those options are visible in the generated `include/zenoh-pico/config.h` from a configured build or install tree.
 
 Run-time options
-====================
+================
 
 All the run-time options presented in `config.h` should be changed using the `zp_config_insert` function with the corresponding key in your application.
 
 Mode
------------
+----
 
 Defines if a Zenoh node is a client or peer.
 
@@ -36,21 +36,87 @@ Defines if a Zenoh node is a client or peer.
 * `Z_CONFIG_MODE_DEFAULT`: The default value for client or peer mode.
 
 Connect
------------
+-------
 
 Defines one or multiple endpoints a node will connect to.
 
 * `Z_CONFIG_CONNECT_KEY`: The index of the option in the config table.
+* `Z_CONFIG_CONNECT_TIMEOUT_KEY`: Timeout, in milliseconds, dedicated to establishing configured connect locators.
+* `Z_CONFIG_CONNECT_TIMEOUT_DEFAULT`: The default timeout value for configured connect locators.
+* `Z_CONFIG_CONNECT_EXIT_ON_FAILURE_KEY`: Whether `z_open` should fail when configured connect locators cannot all be
+  established.
+* `Z_CONFIG_CONNECT_EXIT_ON_FAILURE_CLIENT_DEFAULT`: The default exit-on-failure value for client mode.
+* `Z_CONFIG_CONNECT_EXIT_ON_FAILURE_PEER_DEFAULT`: The default exit-on-failure value for peer mode.
+
+.. warning:: `Z_CONFIG_CONNECT_TIMEOUT_KEY` and `Z_CONFIG_CONNECT_EXIT_ON_FAILURE_KEY` are currently unstable, are only
+  available when `Z_FEATURE_UNSTABLE_API` is enabled, and may be changed in a future release.
+
+`Z_CONFIG_CONNECT_TIMEOUT_KEY` accepts the following values:
+
+* `0`: no retry, try each locator once.
+* `>0`: retry retryable connect failures until the timeout expires.
+* `-1`: retry indefinitely.
+
+The default connect timeout is `0`.
+
+`Z_CONFIG_CONNECT_EXIT_ON_FAILURE_KEY` accepts `true` or `false`.
+Its default value is `true` in client mode and `false` in peer mode.
+
+In client mode, configured connect locators are alternatives.
+Zenoh-Pico tries them until one succeeds or the configured timeout expires.
+Client mode always requires at least one connect locator to succeed before `z_open` returns successfully.
+Setting `Z_CONFIG_CONNECT_EXIT_ON_FAILURE_KEY` to `false` does not allow a client session to open without a transport.
+
+In peer mode, `z_open` also requires a primary transport before returning successfully.
+The primary transport is established either by opening the configured listen locator or by connecting to one configured connect locator.
+Once the primary transport is open, remaining connect locators are added as peers.
+`Z_CONFIG_CONNECT_EXIT_ON_FAILURE_KEY` controls whether failures while connecting configured peer locators are tolerated.
+If it is `true`, non-retryable connect errors fail immediately.
+Retryable connect errors are retried according to `Z_CONFIG_CONNECT_TIMEOUT_KEY`; if the timeout expires before the
+required connectivity is established, `z_open` fails.
+If it is `false`, peer connections that are still failing may continue retrying from the transport task until the
+configured connect timeout expires.
+With `Z_FEATURE_MULTI_THREAD` enabled this task runs in the background; otherwise it progresses when the application
+spins the session tasks.
 
 Listen
------------
+------
 
 Defines a single endpoint a node will listen on.
 
 * `Z_CONFIG_LISTEN_KEY`: The index of the option in the config table.
+* `Z_CONFIG_LISTEN_TIMEOUT_KEY`: Timeout, in milliseconds, dedicated to opening the configured listen locator.
+* `Z_CONFIG_LISTEN_TIMEOUT_DEFAULT`: The default timeout value for the configured listen locator.
+* `Z_CONFIG_LISTEN_EXIT_ON_FAILURE_KEY`: Whether `z_open` should fail when the configured listen locator cannot be
+  opened.
+* `Z_CONFIG_LISTEN_EXIT_ON_FAILURE_DEFAULT`: The default exit-on-failure value for the configured listen locator.
+
+.. warning:: `Z_CONFIG_LISTEN_TIMEOUT_KEY` and `Z_CONFIG_LISTEN_EXIT_ON_FAILURE_KEY` are currently unstable, are only
+  available when `Z_FEATURE_UNSTABLE_API` is enabled, and may be changed in a future release.
+
+Zenoh-Pico supports a single configured listen locator.
+Configuring more than one listen locator causes `z_open` to fail.
+
+`Z_CONFIG_LISTEN_TIMEOUT_KEY` accepts the following values:
+
+* `0`: no retry, try opening the listen locator once.
+* `>0`: retry retryable listen failures until the timeout expires.
+* `-1`: retry indefinitely.
+
+The default listen timeout is `0`.
+
+`Z_CONFIG_LISTEN_EXIT_ON_FAILURE_KEY` accepts `true` or `false`.
+Its default value is `true`.
+
+If `Z_CONFIG_LISTEN_EXIT_ON_FAILURE_KEY` is `true`, non-retryable listen errors fail immediately.
+Retryable listen errors are retried according to `Z_CONFIG_LISTEN_TIMEOUT_KEY`; if the timeout expires before the listen
+locator is opened, `z_open` fails.
+In peer mode, if listening fails and `Z_CONFIG_LISTEN_EXIT_ON_FAILURE_KEY` is `false`, Zenoh-Pico may still open the
+session by connecting to a configured connect locator.
+If no listen or connect locator establishes a primary transport, `z_open` fails.
 
 TLS
------------
+---
 
 With `Z_FEATURE_LINK_TLS` enabled, configure TLS using the following keys:
 
@@ -68,7 +134,7 @@ With `Z_FEATURE_LINK_TLS` enabled, configure TLS using the following keys:
 * `Z_CONFIG_TLS_VERIFY_NAME_ON_CONNECT_KEY`: Set to `false`/`0`/`no`/`off` to skip CN/SAN hostname verification; defaults to enabled.
 
 Scouting
------------
+--------
 
 Scouting is used when a node isn't provided with a connect or listen endpoint.
 
@@ -81,17 +147,17 @@ Defines if and how the node will do the scouting.
 * `Z_CONFIG_SCOUTING_TIMEOUT_KEY`: The index of the option in the config table.
 * `Z_CONFIG_SCOUTING_TIMEOUT_DEFAULT`: Default value for scouting timeout in milliseconds.
 * `Z_CONFIG_SCOUTING_WHAT_KEY`: The index of the option in the config table.
-* `Z_CONFIG_SCOUTING_WHAT_DEFAULT`: Default value for scouting node types as a bitmask, see :ref:`z_whatami_t`
+* `Z_CONFIG_SCOUTING_WHAT_DEFAULT`: Default value for scouting node types as a bitmask, see :c:type:`z_whatami_t`
 
 Session id
------------
+----------
 
 Define a custom value for the session id. Otherwise it will be random.
 
 * `Z_CONFIG_SESSION_ZID_KEY`: The index of the option in the config table.
 
 Unused
------------
+------
 
 The following options are not currently in use, but might be in the future.
 
@@ -101,9 +167,9 @@ The following options are not currently in use, but might be in the future.
 * `Z_CONFIG_PASSWORD_KEY`: The index of the option in the config table.
 
 Manual compile-time options
-====================
+===========================
 
-These options can be changed manually either in `config.h` directly or `config.h.in` if your build system invokes zenoh-pico's own CMake.
+These options can be changed manually in `config.h.in` if your build system invokes zenoh-pico's own CMake.
 
 * `Z_ZID_LENGTH`: Length of session ids generated by zenoh-pico, in bytes.
 * `Z_PROTO_VERSION`: Id used to identify the Zenoh wire protocol version, DO NOT MODIFY.
@@ -117,7 +183,7 @@ These options can be changed manually either in `config.h` directly or `config.h
 * `ZP_ASM_NOP`: Change this options if your platform doesn't have a standard `nop` instruction.
 
 Generated compile-time options
-====================
+==============================
 
 All the generated options must be changed in zenoh-pico's CMake (beware of CMake's cache) or by passing them as flags when calling zenoh-pico's CMake.
 
@@ -126,6 +192,8 @@ All the generated options must be changed in zenoh-pico's CMake (beware of CMake
 * `Z_BATCH_MULTICAST_SIZE`: Size of the multicast packet buffers, in bytes. Any packet bigger than this will be fragmented if possible.
 * `Z_CONFIG_SOCKET_TIMEOUT`: Timeout for socket options, if applicable, in milliseconds.
 * `Z_TRANSPORT_LEASE`: Maximum time without receiving messages from a connection before closing it, in milliseconds.
+* `Z_TRANSPORT_ACCEPT_TIMEOUT`: Link accept timeout in P2P mode in milliseconds (maximum amount of time the listening peer would wait to receive a response).
+* `Z_TRANSPORT_CONNECT_TIMEOUT`: Link connect timeout in milliseconds (maximum amount of time the connecting peer would wait to receive a response).
 * `Z_FEATURE_TCP_NODELAY`: (DEFAULT: ON) Toggle the `TCP_NODELAY` socket option that disables Nagle's algorithm as it can cause latency spikes.
 * `Z_FEATURE_AUTO_RECONNECT`: (DEFAULT: ON) Toggle the auto reconnection feature.
 * `Z_FEATURE_MULTICAST_DECLARATIONS`: (DEFAULT: OFF) Toggle multicast declarations. It lets nodes declare key expressions and activate write filtering but requires each node to send all the declarations every time a new node join the network. 
@@ -136,9 +204,12 @@ All the generated options must be changed in zenoh-pico's CMake (beware of CMake
 The following options are here to reduce binary sizes for users that don't need those features but need the extra memory. 
 
 * `Z_FEATURE_UNSTABLE_API`: (DEFAULT: OFF) Toggle compilation of unstable API functions.
+* `Z_FEATURE_CONNECTIVITY`: (DEFAULT: OFF) Toggle compilation of connectivity status/events API functions. This feature requires `Z_FEATURE_UNSTABLE_API`.
 * `Z_FEATURE_MULTI_THREAD`: (DEFAULT: ON) Toggle compilation of multi thread capabilities. Will limit the library to single thread only without this.
 * `Z_FEATURE_PUBLICATION`: (DEFAULT: ON) Toggle compilation of publication API functions, the library can't publish without this.
+* `Z_FEATURE_ADVANCED_PUBLICATION`: (DEFAULT: OFF) Toggle compilation of advanced publication API functions.
 * `Z_FEATURE_SUBSCRIPTION`: (DEFAULT: ON) Toggle compilation of subscription API functions, the library can't subscribe without this.
+* `Z_FEATURE_ADVANCED_SUBSCRIPTION`: (DEFAULT: OFF) Toggle compilation of advanced subscription API functions.
 * `Z_FEATURE_QUERY`: (DEFAULT: ON) Toggle compilation of query API functions, the library can't get/query without this.
 * `Z_FEATURE_QUERYABLE`: (DEFAULT: ON) Toggle compilation of queryable API functions, the library can't reply to queries without this.
 * `Z_FEATURE_SCOUTING`: (DEFAULT: ON) Toggle compilation of scouting API functions, the library can't scout without this.
@@ -148,7 +219,8 @@ The following options are here to reduce binary sizes for users that don't need 
 * `Z_FEATURE_INTEREST`: (DEFAULT: ON) Toggle compilation of interest protocol, the library can't do write filtering without this.
 * `Z_FEATURE_ENCODING_VALUES`: (DEFAULT: ON) Toggle compilation of encoding values constants, the library will not provide encoding constants without this.
 * `Z_FEATURE_SESSION_CHECK`: (DEFAULT: ON) Toggle session reference check. Dangerous if entities like publishers or queriers are used after a session is closed.
-* `Z_FEATURE_LOCAL_SUBSCRIBER`: (DEFAULT: ON) Toggle local subscriber feature, subscribers will not be triggered by local publications without this.
+* `Z_FEATURE_LOCAL_SUBSCRIBER`: (DEFAULT: OFF) Toggle local subscriber feature, subscribers will not be triggered by local publications without this.
+* `Z_FEATURE_LOCAL_QUERYABLE`: (DEFAULT: OFF) Toggle local queryable feature, queryables will not be triggered by local queries without this.
 * `Z_FEATURE_FRAGMENTATION`: (DEFAULT: ON) Toggle fragmentation feature, the library can't send or receive fragmented messages without this.
 * `Z_FEATURE_MULTICAST_TRANSPORT`: (DEFAULT: ON) Toggle multicast transport feature, the library can't handle multicast connections without this.
 * `Z_FEATURE_UNICAST_TRANSPORT`: (DEFAULT: ON) Toggle unicast transport feature, the library can't handle unicast connections without this.
@@ -161,3 +233,5 @@ The following options are here to reduce binary sizes for users that don't need 
 * `Z_FEATURE_LINK_WS`: (DEFAULT: OFF) Toggle compilation of WebSocket link support.
 * `Z_FEATURE_LINK_SERIAL`: (DEFAULT: OFF) Toggle compilation of Serial link support.
 * `Z_FEATURE_LINK_SERIAL_USB`: (DEFAULT: OFF) Toggle compilation of Serial USB link support.
+* `Z_FEATURE_LINK_TLS`: (DEFAULT: OFF) Toggle compilation of TLS support.
+* `Z_FEATURE_ADMIN_SPACE`: (DEFAULT: OFF) Toggle compilation of admin space API functions. This feature requires both `Z_FEATURE_UNSTABLE_API` and `Z_FEATURE_QUERYABLE`.

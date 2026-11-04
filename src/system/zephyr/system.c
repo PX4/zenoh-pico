@@ -12,18 +12,16 @@
 //   ZettaScale Zenoh Team, <zenoh@zettascale.tech>
 //
 
-#include <version.h>
+#include "zenoh-pico/config.h"
 
-#if KERNEL_VERSION_MAJOR == 2
-#include <random/rand32.h>
-#else
-#include <zephyr/random/random.h>
-#endif
+#if defined(ZENOH_ZEPHYR)
 
 #include <errno.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <sys/time.h>
 #include <unistd.h>
+#include <zephyr/random/random.h>
 
 #include "zenoh-pico/config.h"
 #include "zenoh-pico/system/common/system_error.h"
@@ -59,7 +57,11 @@ void z_free(void *ptr) { k_free(ptr); }
 
 #if Z_FEATURE_MULTI_THREAD == 1
 
+#ifdef CONFIG_ZENOH_PICO_THREADS_NUM
+#define Z_THREADS_NUM CONFIG_ZENOH_PICO_THREADS_NUM
+#else
 #define Z_THREADS_NUM 4
+#endif
 
 #ifdef CONFIG_TEST_EXTRA_STACK_SIZE
 #define Z_PTHREAD_STACK_SIZE_DEFAULT CONFIG_MAIN_STACK_SIZE + CONFIG_TEST_EXTRA_STACK_SIZE
@@ -70,24 +72,119 @@ void z_free(void *ptr) { k_free(ptr); }
 #endif
 
 K_THREAD_STACK_ARRAY_DEFINE(thread_stack_area, Z_THREADS_NUM, Z_PTHREAD_STACK_SIZE_DEFAULT);
-static int thread_index = 0;
+static bool thread_stack_in_use[Z_THREADS_NUM];
+static bool thread_stack_task_tracked[Z_THREADS_NUM];
+static _z_task_t thread_stack_tasks[Z_THREADS_NUM];
+static pthread_mutex_t thread_stack_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static void _z_zephyr_task_release_stack(int stack_slot) {
+    (void)pthread_mutex_lock(&thread_stack_mutex);
+    thread_stack_in_use[stack_slot] = false;
+    thread_stack_task_tracked[stack_slot] = false;
+    (void)pthread_mutex_unlock(&thread_stack_mutex);
+    _Z_DEBUG("zephyr task slot %d released", stack_slot);
+}
+
+static int _z_zephyr_task_stack_slot(const _z_task_t *task) {
+    int stack_slot = -1;
+    (void)pthread_mutex_lock(&thread_stack_mutex);
+    for (int i = 0; i < Z_THREADS_NUM; i++) {
+        if (thread_stack_task_tracked[i] && pthread_equal(thread_stack_tasks[i], *task) != 0) {
+            stack_slot = i;
+            break;
+        }
+    }
+    (void)pthread_mutex_unlock(&thread_stack_mutex);
+    return stack_slot;
+}
 
 /*------------------ Task ------------------*/
 z_result_t _z_task_init(_z_task_t *task, z_task_attr_t *attr, void *(*fun)(void *), void *arg) {
-    z_task_attr_t *lattr = NULL;
-    z_task_attr_t tmp;
-    if (attr == NULL) {
-        (void)pthread_attr_init(&tmp);
-        (void)pthread_attr_setstack(&tmp, &thread_stack_area[thread_index++], Z_PTHREAD_STACK_SIZE_DEFAULT);
-        lattr = &tmp;
+    if (attr != NULL) {
+        int rc = pthread_create(task, attr, fun, arg);
+        if (rc != 0) {
+            _z_report_system_error(rc);
+            _Z_ERROR_RETURN(_Z_ERR_SYSTEM_GENERIC);
+        }
+        return _Z_RES_OK;
     }
 
-    _Z_CHECK_SYS_ERR(pthread_create(task, lattr, fun, arg));
+    int stack_slot = -1;
+    (void)pthread_mutex_lock(&thread_stack_mutex);
+    for (int i = 0; i < Z_THREADS_NUM; i++) {
+        if (!thread_stack_in_use[i]) {
+            thread_stack_in_use[i] = true;
+            stack_slot = i;
+            break;
+        }
+    }
+    (void)pthread_mutex_unlock(&thread_stack_mutex);
+    if (stack_slot < 0) {
+        _Z_ERROR("zephyr task stack slot OOM: all %d stack slots are in use", Z_THREADS_NUM);
+        _Z_ERROR_RETURN(_Z_ERR_SYSTEM_OUT_OF_MEMORY);
+    }
+    _Z_DEBUG("zephyr task slot %d allocated for task %p", stack_slot, fun);
+
+    z_task_attr_t tmp;
+    int rc = pthread_attr_init(&tmp);
+    if (rc != 0) {
+        _z_zephyr_task_release_stack(stack_slot);
+        _z_report_system_error(rc);
+        _Z_ERROR_RETURN(_Z_ERR_SYSTEM_GENERIC);
+    }
+    rc = pthread_attr_setstack(&tmp, &thread_stack_area[stack_slot], Z_PTHREAD_STACK_SIZE_DEFAULT);
+    if (rc != 0) {
+        (void)pthread_attr_destroy(&tmp);
+        _z_zephyr_task_release_stack(stack_slot);
+        _z_report_system_error(rc);
+        _Z_ERROR_RETURN(_Z_ERR_SYSTEM_GENERIC);
+    }
+
+    rc = pthread_create(task, &tmp, fun, arg);
+    int attr_rc = pthread_attr_destroy(&tmp);
+    if (rc != 0) {
+        _z_zephyr_task_release_stack(stack_slot);
+        _z_report_system_error(rc);
+        _Z_ERROR_RETURN(_Z_ERR_SYSTEM_GENERIC);
+    }
+    if (attr_rc != 0) {
+        _z_report_system_error(attr_rc);
+    }
+
+    (void)pthread_mutex_lock(&thread_stack_mutex);
+    thread_stack_tasks[stack_slot] = *task;
+    thread_stack_task_tracked[stack_slot] = true;
+    (void)pthread_mutex_unlock(&thread_stack_mutex);
+    return _Z_RES_OK;
 }
 
-z_result_t _z_task_join(_z_task_t *task) { _Z_CHECK_SYS_ERR(pthread_join(*task, NULL)); }
+z_result_t _z_task_join(_z_task_t *task) {
+    int stack_slot = _z_zephyr_task_stack_slot(task);
+    int rc = pthread_join(*task, NULL);
+    if (rc != 0) {
+        _z_report_system_error(rc);
+        _Z_ERROR_RETURN(_Z_ERR_SYSTEM_GENERIC);
+    }
+    if (stack_slot >= 0) {
+        _z_zephyr_task_release_stack(stack_slot);
+    }
+    return _Z_RES_OK;
+}
 
-z_result_t _z_task_detach(_z_task_t *task) { _Z_CHECK_SYS_ERR(pthread_detach(*task)); }
+z_result_t _z_task_detach(_z_task_t *task) {
+    int stack_slot = _z_zephyr_task_stack_slot(task);
+    int rc = pthread_detach(*task);
+    if (rc != 0) {
+        _z_report_system_error(rc);
+        _Z_ERROR_RETURN(_Z_ERR_SYSTEM_GENERIC);
+    }
+    if (stack_slot >= 0) {
+        (void)pthread_mutex_lock(&thread_stack_mutex);
+        thread_stack_task_tracked[stack_slot] = false;
+        (void)pthread_mutex_unlock(&thread_stack_mutex);
+    }
+    return _Z_RES_OK;
+}
 
 z_result_t _z_task_cancel(_z_task_t *task) { _Z_CHECK_SYS_ERR(pthread_cancel(*task)); }
 
@@ -98,6 +195,10 @@ void _z_task_free(_z_task_t **task) {
     z_free(ptr);
     *task = NULL;
 }
+
+_z_task_id_t _z_task_get_id(const _z_task_t *task) { return *task; }
+_z_task_id_t _z_task_current_id(void) { return pthread_self(); }
+bool _z_task_id_equal(const _z_task_id_t *l, const _z_task_id_t *r) { return pthread_equal(*l, *r) != 0; }
 
 /*------------------ Mutex ------------------*/
 z_result_t _z_mutex_init(_z_mutex_t *m) { _Z_CHECK_SYS_ERR(pthread_mutex_init(m, NULL)); }
@@ -203,28 +304,39 @@ z_clock_t z_clock_now(void) {
     return now;
 }
 
+unsigned long zp_clock_elapsed_us_since(z_clock_t *instant, z_clock_t *epoch) {
+    long elapsed = (1000000 * (instant->tv_sec - epoch->tv_sec) + (instant->tv_nsec - epoch->tv_nsec) / 1000);
+    return elapsed > 0 ? (unsigned long)elapsed : 0;
+}
+
+unsigned long zp_clock_elapsed_ms_since(z_clock_t *instant, z_clock_t *epoch) {
+    long elapsed = (1000 * (instant->tv_sec - epoch->tv_sec) + (instant->tv_nsec - epoch->tv_nsec) / 1000000);
+    return elapsed > 0 ? (unsigned long)elapsed : 0;
+}
+
+unsigned long zp_clock_elapsed_s_since(z_clock_t *instant, z_clock_t *epoch) {
+    long elapsed = (instant->tv_sec - epoch->tv_sec);
+    return elapsed > 0 ? (unsigned long)elapsed : 0;
+}
+
 unsigned long z_clock_elapsed_us(z_clock_t *instant) {
     z_clock_t now;
     clock_gettime(CLOCK_MONOTONIC, &now);
-
-    unsigned long elapsed = (1000000 * (now.tv_sec - instant->tv_sec) + (now.tv_nsec - instant->tv_nsec) / 1000);
-    return elapsed;
+    return zp_clock_elapsed_us_since(&now, instant);
 }
 
 unsigned long z_clock_elapsed_ms(z_clock_t *instant) {
     z_clock_t now;
     clock_gettime(CLOCK_MONOTONIC, &now);
 
-    unsigned long elapsed = (1000 * (now.tv_sec - instant->tv_sec) + (now.tv_nsec - instant->tv_nsec) / 1000000);
-    return elapsed;
+    return zp_clock_elapsed_ms_since(&now, instant);
 }
 
 unsigned long z_clock_elapsed_s(z_clock_t *instant) {
     z_clock_t now;
     clock_gettime(CLOCK_MONOTONIC, &now);
 
-    unsigned long elapsed = now.tv_sec - instant->tv_sec;
-    return elapsed;
+    return zp_clock_elapsed_s_since(&now, instant);
 }
 
 void z_clock_advance_us(z_clock_t *clock, unsigned long duration) {
@@ -250,9 +362,16 @@ void z_clock_advance_ms(z_clock_t *clock, unsigned long duration) {
 void z_clock_advance_s(z_clock_t *clock, unsigned long duration) { clock->tv_sec += duration; }
 
 /*------------------ Time ------------------*/
+static void _z_gettimeofday(z_time_t *tv) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    tv->tv_sec = ts.tv_sec;
+    tv->tv_usec = ts.tv_nsec / 1000;
+}
+
 z_time_t z_time_now(void) {
     z_time_t now;
-    gettimeofday(&now, NULL);
+    _z_gettimeofday(&now);
     return now;
 }
 
@@ -266,7 +385,7 @@ const char *z_time_now_as_str(char *const buf, unsigned long buflen) {
 
 unsigned long z_time_elapsed_us(z_time_t *time) {
     z_time_t now;
-    gettimeofday(&now, NULL);
+    _z_gettimeofday(&now);
 
     unsigned long elapsed = (1000000 * (now.tv_sec - time->tv_sec) + (now.tv_usec - time->tv_usec));
     return elapsed;
@@ -274,7 +393,7 @@ unsigned long z_time_elapsed_us(z_time_t *time) {
 
 unsigned long z_time_elapsed_ms(z_time_t *time) {
     z_time_t now;
-    gettimeofday(&now, NULL);
+    _z_gettimeofday(&now);
 
     unsigned long elapsed = (1000 * (now.tv_sec - time->tv_sec) + (now.tv_usec - time->tv_usec) / 1000);
     return elapsed;
@@ -282,7 +401,7 @@ unsigned long z_time_elapsed_ms(z_time_t *time) {
 
 unsigned long z_time_elapsed_s(z_time_t *time) {
     z_time_t now;
-    gettimeofday(&now, NULL);
+    _z_gettimeofday(&now);
 
     unsigned long elapsed = now.tv_sec - time->tv_sec;
     return elapsed;
@@ -290,8 +409,10 @@ unsigned long z_time_elapsed_s(z_time_t *time) {
 
 z_result_t _z_get_time_since_epoch(_z_time_since_epoch *t) {
     z_time_t now;
-    gettimeofday(&now, NULL);
+    _z_gettimeofday(&now);
     t->secs = now.tv_sec;
     t->nanos = now.tv_usec * 1000;
     return 0;
 }
+
+#endif /* defined(ZENOH_ZEPHYR) */

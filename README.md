@@ -57,6 +57,8 @@ For other platforms - like RTOS for embedded systems / microcontrollers -, you w
 
 ## 2. How to build it
 
+For platform profiles and adding a new platform, see [docs/platforms.rst](docs/platforms.rst).
+
 ### 2.1 Unix Environments
 
 To build the **zenoh-pico** library, you need to ensure that [cmake](https://cmake.org) is available
@@ -102,6 +104,8 @@ tested micro controllers.
 
 #### 2.2.1. Zephyr
 
+Zephyr 3.7 or later is required.
+
 Note: tested with reel_board, nucleo-f767zi, nucleo-f420zi, and nRF52840 boards.
 
 A typical PlatformIO project for Zephyr framework must have the following
@@ -146,6 +150,20 @@ or just include the following line in platformio.ini:
 
   ```ini
   lib_deps = https://github.com/eclipse-zenoh/zenoh-pico
+  ```
+
+When zenoh-pico is used as a PlatformIO library, the number of preallocated
+pthread stacks defaults to 4 and can be changed with a build flag:
+
+  ```ini
+  build_flags = -DCONFIG_ZENOH_PICO_THREADS_NUM=8
+  ```
+
+When zenoh-pico is configured as a Zephyr module instead, set the option in
+`prj.conf`:
+
+  ```ini
+  CONFIG_ZENOH_PICO_THREADS_NUM=8
   ```
 
 Finally, your code should go into project_dir/src/main.c.
@@ -480,7 +498,7 @@ The simplest way to run some of the example is to get a Docker image of the **ze
 
 ### 3.1. Starting the Zenoh Router
 
-Assuming you've pulled the Docker image of the **zenoh** router on a Linux host (to leverage UDP multicast scouting as explained [here](https://zenoh.io/docs/getting-started/quick-test/#run-zenoh-router-in-a-docker-container), then simply do:
+Assuming you've pulled the Docker image of the **zenoh** router on a Linux host to [leverage UDP multicast scouting](https://zenoh.io/docs/getting-started/quick-test/#run-zenoh-router-in-a-docker-container), then simply do:
 
 ```bash
 docker run --init --net host eclipse/zenoh:main
@@ -578,7 +596,7 @@ A publisher will start publishing over UDP multicast and the **zenoh** router wi
 
 ### Activate debug logs
 
-By default debug logs are deactivated but if you're encountering issues they can help you finding the cause. To activate them you need to pass the build flag value: `-DZENOH_LOG_DEBUG`
+By default debug logs are deactivated but if you're encountering issues they can help you finding the cause. To activate them you need to pass the build flag value: `-DZENOH_LOG=DEBUG`
 
 ### Error when opening a session on a microcontroller
 

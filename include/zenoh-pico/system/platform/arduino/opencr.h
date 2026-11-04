@@ -29,6 +29,7 @@ typedef void *_z_task_t;
 typedef void *z_task_attr_t;
 typedef void *_z_mutex_t;
 typedef void *_z_condvar_t;
+typedef void *_z_task_id_t;
 #endif  // Z_FEATURE_MULTI_THREAD == 1
 
 typedef struct timespec z_clock_t;
@@ -57,7 +58,7 @@ typedef struct {
 
 typedef struct {
     union {
-#if Z_FEATURE_LINK_TCP == 1 || Z_FEATURE_LINK_UDP_MULTICAST == 1 || Z_FEATURE_LINK_UDP_UNICAST == 1
+#if defined(ZP_PLATFORM_SOCKET_LINKS_ENABLED)
         __z_net_iptcp_addr_t _iptcp;
 #endif
     };

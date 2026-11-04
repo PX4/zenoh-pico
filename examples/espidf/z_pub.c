@@ -139,10 +139,6 @@ void app_main() {
     }
     printf("OK\n");
 
-    // Start the receive and the session lease loop for zenoh-pico
-    zp_start_read_task(z_loan_mut(s), NULL);
-    zp_start_lease_task(z_loan_mut(s), NULL);
-
     printf("Declaring publisher for '%s'...", KEYEXPR);
     z_owned_publisher_t pub;
     z_view_keyexpr_t ke;
@@ -156,7 +152,7 @@ void app_main() {
     char buf[256];
     for (int idx = 0; 1; ++idx) {
         sleep(1);
-        sprintf(buf, "[%4d] %s", idx, VALUE);
+        snprintf(buf, sizeof(buf), "[%4d] %s", idx, VALUE);
         printf("Putting Data ('%s': '%s')...\n", KEYEXPR, buf);
 
         // Create payload

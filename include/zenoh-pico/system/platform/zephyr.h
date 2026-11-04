@@ -15,18 +15,8 @@
 #ifndef ZENOH_PICO_SYSTEM_ZEPHYR_TYPES_H
 #define ZENOH_PICO_SYSTEM_ZEPHYR_TYPES_H
 
-#include <version.h>
-
-#if KERNEL_VERSION_MAJOR == 2
-#include <kernel.h>
-#elif KERNEL_VERSION_MAJOR == 3 || KERNEL_VERSION_MAJOR == 4
-#include <zephyr/kernel.h>
-#else
-#pragma GCC warning "This Zephyr version might not be supported."
-#include <zephyr/kernel.h>
-#endif
-
 #include <pthread.h>
+#include <zephyr/kernel.h>
 
 #include "zenoh-pico/config.h"
 
@@ -40,14 +30,19 @@ typedef pthread_attr_t z_task_attr_t;
 typedef pthread_mutex_t _z_mutex_t;
 typedef pthread_mutex_t _z_mutex_rec_t;
 typedef pthread_cond_t _z_condvar_t;
+typedef pthread_t _z_task_id_t;
 #endif  // Z_FEATURE_MULTI_THREAD == 1
 
 typedef struct timespec z_clock_t;
 typedef struct timeval z_time_t;
 
+#if defined(ZP_PLATFORM_SOCKET_LINKS_ENABLED)
+struct zsock_addrinfo;
+#endif
+
 typedef struct {
     union {
-#if Z_FEATURE_LINK_TCP == 1 || Z_FEATURE_LINK_UDP_MULTICAST == 1 || Z_FEATURE_LINK_UDP_UNICAST == 1
+#if defined(ZP_PLATFORM_SOCKET_LINKS_ENABLED)
         int _fd;
 #endif
 #if Z_FEATURE_LINK_SERIAL == 1
@@ -58,8 +53,8 @@ typedef struct {
 
 typedef struct {
     union {
-#if Z_FEATURE_LINK_TCP == 1 || Z_FEATURE_LINK_UDP_MULTICAST == 1 || Z_FEATURE_LINK_UDP_UNICAST == 1
-        struct addrinfo *_iptcp;
+#if defined(ZP_PLATFORM_SOCKET_LINKS_ENABLED)
+        struct zsock_addrinfo *_iptcp;
 #endif
     };
 } _z_sys_net_endpoint_t;

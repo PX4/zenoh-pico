@@ -32,8 +32,8 @@
 #include "zenoh-pico/protocol/definitions/transport.h"
 #include "zenoh-pico/protocol/ext.h"
 #include "zenoh-pico/protocol/iobuf.h"
-#include "zenoh-pico/protocol/keyexpr.h"
 #include "zenoh-pico/utils/logging.h"
+#include "zenoh-pico/utils/query_params.h"
 #include "zenoh-pico/utils/result.h"
 
 /*=============================*/
@@ -76,9 +76,14 @@ z_result_t _z_id_encode_as_slice(_z_wbuf_t *wbf, const _z_id_t *id) {
 /// guarantee that this state will be set in case of errors.
 z_result_t _z_id_decode_as_slice(_z_id_t *id, _z_zbuf_t *zbf) {
     z_result_t ret = _Z_RES_OK;
-    uint8_t len = _z_zbuf_read(zbf);
-    _z_zbuf_read_bytes(zbf, id->id, 0, len);
-    memset(id->id + len, 0, 16 - len);
+    uint8_t len;
+    _Z_RETURN_IF_ERR(_z_uint8_decode(&len, zbf));
+    if (len > sizeof(id->id)) {
+        _Z_ERROR_LOG(_Z_ERR_MESSAGE_DESERIALIZATION_FAILED);
+        return _Z_ERR_MESSAGE_DESERIALIZATION_FAILED;
+    }
+    _Z_RETURN_IF_ERR(_z_zbuf_read_exact(zbf, id->id, len));
+    memset(id->id + len, 0, sizeof(id->id) - len);
     return ret;
 }
 
@@ -112,7 +117,7 @@ z_result_t _z_timestamp_decode(_z_timestamp_t *ts, _z_zbuf_t *zbf) {
 }
 
 /*------------------ ResKey Field ------------------*/
-z_result_t _z_keyexpr_encode(_z_wbuf_t *wbf, bool has_suffix, const _z_keyexpr_t *fld) {
+z_result_t _z_wireexpr_encode(_z_wbuf_t *wbf, bool has_suffix, const _z_wireexpr_t *fld) {
     z_result_t ret = _Z_RES_OK;
     _Z_DEBUG("Encoding _RESKEY");
 
@@ -124,8 +129,8 @@ z_result_t _z_keyexpr_encode(_z_wbuf_t *wbf, bool has_suffix, const _z_keyexpr_t
     return ret;
 }
 
-z_result_t _z_keyexpr_decode(_z_keyexpr_t *ke, _z_zbuf_t *zbf, bool has_suffix, bool remote_mapping,
-                             uintptr_t mapping) {
+z_result_t _z_wireexpr_decode(_z_wireexpr_t *ke, _z_zbuf_t *zbf, bool has_suffix, bool remote_mapping,
+                              uintptr_t mapping) {
     _Z_DEBUG("Decoding _RESKEY");
     z_result_t ret = _Z_RES_OK;
 
@@ -395,8 +400,8 @@ z_result_t _z_query_encode(_z_wbuf_t *wbf, const _z_msg_query_t *msg) {
     z_result_t ret = _Z_RES_OK;
     uint8_t header = _Z_MID_Z_QUERY;
 
-    bool has_params = _z_slice_check(&msg->_parameters);
-    if (has_params) {
+    bool has_params = _z_slice_check(&msg->_parameters) && msg->_parameters.len > 0;
+    if (has_params || msg->_implicit_anyke) {
         _Z_SET_FLAG(header, _Z_FLAG_Z_Q_P);
     }
     bool has_consolidation = (msg->_consolidation != Z_CONSOLIDATION_MODE_DEFAULT);
@@ -411,9 +416,22 @@ z_result_t _z_query_encode(_z_wbuf_t *wbf, const _z_msg_query_t *msg) {
     if (has_consolidation) {
         _Z_RETURN_IF_ERR(_z_uint8_encode(wbf, msg->_consolidation));
     }
-    if (has_params) {
+    if (msg->_implicit_anyke) {
+        if (has_params) {
+            _z_slice_t anykey_slice = _z_slice_from_buf_custom_deleter(
+                (uint8_t *)_Z_QUERY_PARAMS_LIST_SEPARATOR _Z_QUERY_PARAMS_KEY_ANYKE,
+                _Z_QUERY_PARAMS_LIST_SEPARATOR_LEN + _Z_QUERY_PARAMS_KEY_ANYKE_LEN, _z_delete_context_static());
+            _z_slice_t combined[2] = {msg->_parameters, anykey_slice};
+            _Z_RETURN_IF_ERR(_z_slices_encode(wbf, combined, 2));
+        } else {
+            _z_slice_t anykey_slice = _z_slice_from_buf_custom_deleter(
+                (uint8_t *)_Z_QUERY_PARAMS_KEY_ANYKE, _Z_QUERY_PARAMS_KEY_ANYKE_LEN, _z_delete_context_static());
+            _Z_RETURN_IF_ERR(_z_slice_encode(wbf, &anykey_slice));
+        }
+    } else if (has_params) {
         _Z_RETURN_IF_ERR(_z_slice_encode(wbf, &msg->_parameters));
     }
+
     if (required_exts.body) {
         uint8_t extheader = _Z_MSG_EXT_ENC_ZBUF | 0x03;
         if (required_exts.info || required_exts.attachment) {
@@ -472,7 +490,9 @@ z_result_t _z_query_decode_extensions(_z_msg_ext_t *extension, void *ctx) {
 z_result_t _z_query_decode(_z_msg_query_t *msg, _z_zbuf_t *zbf, uint8_t header) {
     _Z_DEBUG("Decoding _Z_MID_Z_QUERY");
     z_result_t ret = _Z_RES_OK;
-
+    msg->_implicit_anyke = false;
+    // implicit_anyke is always false on reception, since the presence of the _anyke parameter is signaled by
+    // the presence of the _anyke key in the parameters list, which is parsed later.
     if (_Z_HAS_FLAG(header, _Z_FLAG_Z_Q_C)) {
         _Z_RETURN_IF_ERR(_z_uint8_decode((uint8_t *)&msg->_consolidation, zbf));
     } else {
@@ -621,7 +641,7 @@ z_result_t _z_scout_decode(_z_s_msg_scout_t *msg, _z_zbuf_t *zbf, uint8_t header
     msg->_zid = _z_id_empty();
     if ((ret == _Z_RES_OK) && (_Z_HAS_FLAG(cbyte, _Z_FLAG_T_SCOUT_I) == true)) {
         uint8_t zidlen = ((cbyte & 0xF0) >> 4) + (uint8_t)1;
-        _z_zbuf_read_bytes(zbf, msg->_zid.id, 0, zidlen);
+        ret |= _z_zbuf_read_exact(zbf, msg->_zid.id, zidlen);
     }
 
     return ret;
@@ -660,11 +680,9 @@ z_result_t _z_hello_decode_na(_z_s_msg_hello_t *msg, _z_zbuf_t *zbf, uint8_t hea
     msg->_whatami = _z_whatami_from_uint8(cbyte);
     uint8_t zidlen = ((cbyte & 0xF0) >> 4) + (uint8_t)1;
 
+    msg->_zid = _z_id_empty();
     if (ret == _Z_RES_OK) {
-        msg->_zid = _z_id_empty();
-        _z_zbuf_read_bytes(zbf, msg->_zid.id, 0, zidlen);
-    } else {
-        msg->_zid = _z_id_empty();
+        ret |= _z_zbuf_read_exact(zbf, msg->_zid.id, zidlen);
     }
 
     if ((ret == _Z_RES_OK) && (_Z_HAS_FLAG(header, _Z_FLAG_T_HELLO_L) == true)) {

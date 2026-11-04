@@ -15,14 +15,17 @@
 #ifndef ZENOH_PICO_UNICAST_ACCEPT_H
 #define ZENOH_PICO_UNICAST_ACCEPT_H
 
+#include "zenoh-pico/runtime/runtime.h"
 #include "zenoh-pico/transport/transport.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-z_result_t _zp_unicast_start_accept_task(_z_transport_unicast_t *ztu);
-void _zp_unicast_stop_accept_task(_z_transport_common_t *ztc);
+#if Z_FEATURE_UNICAST_TRANSPORT == 1 && Z_FEATURE_UNICAST_PEER == 1 && \
+    (Z_FEATURE_LINK_TCP == 1 || Z_FEATURE_LINK_TLS == 1)
+_z_fut_fn_result_t _zp_unicast_accept_task_fn(void *ztu_arg, _z_executor_t *executor);
+#endif
 
 #ifdef __cplusplus
 }

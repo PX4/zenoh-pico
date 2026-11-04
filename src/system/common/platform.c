@@ -14,7 +14,6 @@
 #include "zenoh-pico/system/common/platform.h"
 
 #include "zenoh-pico/api/olv_macros.h"
-#include "zenoh-pico/utils/logging.h"
 
 #if Z_FEATURE_MULTI_THREAD == 1
 

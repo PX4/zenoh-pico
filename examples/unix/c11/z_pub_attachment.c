@@ -52,12 +52,14 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    // Start read and lease tasks for zenoh-pico
-    if (zp_start_read_task(z_loan_mut(s), NULL) < 0 || zp_start_lease_task(z_loan_mut(s), NULL) < 0) {
-        printf("Unable to start read and lease tasks\n");
+#if Z_FEATURE_ADMIN_SPACE == 1
+    // Start admin space
+    if (zp_start_admin_space(z_loan_mut(s)) < 0) {
+        printf("Unable to start admin space\n");
         z_drop(z_move(s));
         return -1;
     }
+#endif
     // Declare publisher
     printf("Declaring publisher for '%s'...\n", keyexpr);
     z_view_keyexpr_t ke;
@@ -93,7 +95,7 @@ int main(int argc, char **argv) {
     char buf[256];
     for (int idx = 0; idx < n; ++idx) {
         z_sleep_s(1);
-        sprintf(buf, "[%4d] %s", idx, value);
+        snprintf(buf, sizeof(buf), "[%4d] %s", idx, value);
         printf("Putting Data ('%s': '%s')...\n", keyexpr, buf);
 
         // Create payload
@@ -102,7 +104,7 @@ int main(int argc, char **argv) {
 
         // Add attachment value
         char buf_ind[16];
-        sprintf(buf_ind, "%d", idx);
+        snprintf(buf_ind, sizeof(buf_ind), "%d", idx);
         kvs[1] = (kv_pair_t){.key = "index", .value = buf_ind};
         ze_owned_serializer_t serializer;
         ze_serializer_empty(&serializer);
