@@ -14,7 +14,7 @@
 
 #include "zenoh-pico/link/transport/tcp.h"
 
-#if defined(ZP_PLATFORM_SOCKET_POSIX)
+#if defined(ZP_PLATFORM_SOCKET_POSIX) && (Z_FEATURE_LINK_TCP == 1 || Z_FEATURE_LINK_TLS == 1 || Z_FEATURE_LINK_WS == 1)
 
 #include <arpa/inet.h>
 #include <errno.h>

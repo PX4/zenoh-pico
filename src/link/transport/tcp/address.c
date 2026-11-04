@@ -17,6 +17,8 @@
 #include "zenoh-pico/link/endpoint.h"
 #include "zenoh-pico/link/transport/tcp.h"
 
+#if Z_FEATURE_LINK_TCP == 1 || Z_FEATURE_LINK_TLS == 1 || Z_FEATURE_LINK_WS == 1
+
 char *_z_tcp_address_parse_host(const _z_string_t *address) { return _z_endpoint_parse_host(address); }
 
 z_result_t _z_tcp_address_valid(const _z_string_t *address) {
@@ -44,3 +46,5 @@ z_result_t _z_tcp_endpoint_init_from_address(_z_sys_net_endpoint_t *ep, const _z
     z_free(port);
     return ret;
 }
+
+#endif

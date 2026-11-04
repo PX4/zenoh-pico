@@ -17,6 +17,8 @@
 #include "zenoh-pico/link/endpoint.h"
 #include "zenoh-pico/link/transport/udp_unicast.h"
 
+#if Z_FEATURE_LINK_UDP_UNICAST == 1
+
 z_result_t _z_udp_unicast_address_valid(const _z_string_t *address) {
     char *host = _z_endpoint_parse_host(address);
     char *port = _z_endpoint_parse_port(address);
@@ -42,3 +44,5 @@ z_result_t _z_udp_unicast_endpoint_init_from_address(_z_sys_net_endpoint_t *ep, 
     z_free(port);
     return ret;
 }
+
+#endif

@@ -14,7 +14,7 @@
 
 #include "zenoh-pico/link/transport/udp_unicast.h"
 
-#if defined(ZP_PLATFORM_SOCKET_POSIX)
+#if defined(ZP_PLATFORM_SOCKET_POSIX) && (Z_FEATURE_LINK_UDP_UNICAST == 1)
 
 #include <ifaddrs.h>
 #include <net/if.h>
